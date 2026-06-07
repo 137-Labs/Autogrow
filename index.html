@@ -1,0 +1,694 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"/>
+<meta name="theme-color" content="#0a1a0a"/>
+<meta name="mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<title>AutoGrow</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=DM+Mono:wght@400;500&display=swap');
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+:root{
+  --bg:#071007;--bg2:#0d1a0d;--bg3:#142014;
+  --green:#4ade80;--green2:#22c55e;--green3:#166534;
+  --yellow:#facc15;--orange:#fb923c;--red:#f87171;
+  --purple:#a78bfa;--blue:#60a5fa;--teal:#2dd4bf;
+  --text:#e8f5e8;--text2:#9cbf9c;--text3:#4a6b4a;
+  --border:#1a2e1a;--border2:#243824;
+}
+body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);min-height:100vh;overflow-x:hidden}
+input,select,button,textarea{font-family:'DM Sans',sans-serif;-webkit-appearance:none}
+input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none}
+::-webkit-scrollbar{width:3px;height:3px}
+::-webkit-scrollbar-thumb{background:#1a2e1a;border-radius:2px}
+
+/* Tab bar */
+.tbar{display:flex;overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none;background:var(--bg2);border-bottom:1px solid var(--border2);padding:0 6px}
+.tbar::-webkit-scrollbar{display:none}
+.tbar button{flex-shrink:0;padding:11px 12px;background:none;border:none;border-bottom:2px solid transparent;color:var(--text3);font-family:'DM Sans',sans-serif;font-size:12px;font-weight:500;cursor:pointer;white-space:nowrap;transition:all .15s}
+.tbar button.active{color:var(--green);border-bottom-color:var(--green);font-weight:600}
+
+/* Inputs */
+.inp{width:100%;background:var(--bg3);border:1.5px solid var(--border2);border-radius:12px;padding:11px 14px;color:var(--text);font-size:14px;outline:none;transition:border-color .2s}
+.inp:focus{border-color:#4ade8040}
+.inp-sm{background:var(--bg3);border:1.5px solid var(--border2);border-radius:8px;padding:6px 10px;color:var(--text);font-size:13px;outline:none}
+
+/* Buttons */
+.btn{border:none;border-radius:12px;padding:12px 18px;cursor:pointer;font-family:'DM Sans',sans-serif;font-weight:600;font-size:14px;transition:all .15s}
+.btn:active{transform:scale(.97)}
+.btn-green{background:var(--green);color:#071007}
+.btn-outline{background:transparent;border:1.5px solid var(--border2);color:var(--text2)}
+.btn-red{background:#f8717120;color:#f87171;border:1.5px solid #f8717130}
+
+/* Labels */
+.lbl{font-size:10px;color:var(--text3);font-weight:600;text-transform:uppercase;letter-spacing:.07em;margin-bottom:5px;font-family:'DM Mono',monospace}
+
+/* Cards */
+.card{background:var(--bg2);border:1.5px solid var(--border);border-radius:16px;overflow:hidden}
+.card-pad{padding:14px 16px}
+
+/* Modal */
+.mbg{position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:1000;display:flex;align-items:flex-end;justify-content:center;backdrop-filter:blur(4px)}
+.modal{background:var(--bg2);border:1.5px solid var(--border2);border-radius:22px 22px 0 0;padding:20px 18px 36px;width:100%;max-width:480px;max-height:90vh;overflow-y:auto}
+.modal-handle{width:32px;height:3px;background:var(--border2);border-radius:2px;margin:0 auto 18px}
+
+/* Toast */
+.toast{position:fixed;top:20px;left:50%;transform:translateX(-50%);background:var(--green);color:#071007;padding:10px 20px;border-radius:100px;font-size:13px;font-weight:600;z-index:9999;display:none;white-space:nowrap}
+
+/* Progress */
+.pt{background:var(--border);border-radius:100px;overflow:hidden}
+.pb{border-radius:100px;transition:width .5s cubic-bezier(.4,0,.2,1)}
+
+/* Stage colors */
+.stage-seed{color:#facc15}
+.stage-seedling{color:#86efac}
+.stage-veg{color:#4ade80}
+.stage-preflower{color:#fb923c}
+.stage-flower{color:#a78bfa}
+.stage-flush{color:#60a5fa}
+.stage-harvest{color:#f87171}
+
+/* Grid */
+.g2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+
+select option{background:var(--bg2);color:var(--text)}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div id="toast" class="toast"></div>
+<script>
+"use strict";
+var LS="autogrow-v1";
+function loadD(){
+  try{var r=localStorage.getItem(LS);if(!r)return null;return JSON.parse(r);}catch(e){return null;}
+}
+function saveD(d){try{localStorage.setItem(LS,JSON.stringify(d));}catch(e){}}
+function uid(){return Date.now().toString(36)+Math.random().toString(36).slice(2);}
+function tod(){return new Date().toISOString().slice(0,10);}
+function esc(s){return String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");}
+function showToast(m,c){var t=document.getElementById("toast");t.textContent=m;t.style.background=c||"var(--green)";t.style.color=c?"#fff":"#071007";t.style.display="block";setTimeout(function(){t.style.display="none";},2500);}
+function daysSince(dateStr){if(!dateStr)return 0;var d=new Date(dateStr),n=new Date();return Math.floor((n-d)/(1000*60*60*24));}
+function addDays(dateStr,n){var d=new Date(dateStr);d.setDate(d.getDate()+n);return d.toISOString().slice(0,10);}
+
+// ── Stage calculator ─────────────────────────────────────
+function getStage(days,totalDays){
+  totalDays=totalDays||77;
+  if(days<=3)return{name:"Germination",key:"seed",icon:"🌰",color:"#facc15",tip:"Keep moist and warm 20-25°C. No nutrients. No direct light needed yet."};
+  if(days<=14)return{name:"Seedling",key:"seedling",icon:"🌱",color:"#86efac",tip:"Gentle light 18/6. Water sparingly. No nutrients yet. Watch for first true leaves."};
+  if(days<=28)return{name:"Vegetative",key:"veg",icon:"🌿",color:"#4ade80",tip:"18/6 light. Start light nutrients. Water when top inch of soil is dry."};
+  if(days<=35)return{name:"Pre-Flower",key:"preflower",icon:"🌸",color:"#fb923c",tip:"Auto-flower triggering. Increase P+K. Watch for white pistils. Stretch incoming."};
+  if(days<=(totalDays-10))return{name:"Flowering",key:"flower",icon:"🌺",color:"#a78bfa",tip:"Full bloom nutrients. Watch for amber trichomes near harvest. Maintain humidity below 50%."};
+  if(days<=(totalDays-3))return{name:"Flush",key:"flush",icon:"💧",color:"#60a5fa",tip:"Plain pH water only. Remove all nutrients. Flush 3-7 days before harvest."};
+  return{name:"Harvest Ready",key:"harvest",icon:"✂️",color:"#f87171",tip:"Check trichomes: mostly cloudy = peak THC. Amber trichomes = more body effect."};
+}
+
+function getWeeklyTips(days,setup){
+  var week=Math.floor(days/7)+1;
+  var tips=[];
+  if(days<7)tips.push({icon:"💧",text:"Water gently - small amounts only. No runoff needed yet."});
+  if(days>=7&&days<14)tips.push({icon:"🌡️",text:"Keep temp 22-26°C day, 18-22°C night. Humidity 60-70%."});
+  if(days>=14&&days<21)tips.push({icon:"🧪",text:"Start TerraCanna Starter at 25% dose. pH 6.0-6.5 if possible."});
+  if(days>=21&&days<35)tips.push({icon:"🪴",text:"Plants in full veg. Increase TerraCanna Grow. Watering every 2-3 days."});
+  if(days>=35&&days<49)tips.push({icon:"🌸",text:"Pre-flower stretch. Switch to TerraCanna Bloom. Reduce nitrogen."});
+  if(days>=49)tips.push({icon:"🌺",text:"Full flower. Max PK boost. Check for deficiencies. Reduce humidity to 45%."});
+  if(days>=63)tips.push({icon:"🔍",text:"Start checking trichomes weekly with loupe or microscope."});
+  if(!setup.phing)tips.push({icon:"📱",text:"Getting a pH pen this week would really help — pH 6.0-6.5 for soil."});
+  return tips;
+}
+
+// ── Terra Canna feed chart ───────────────────────────────
+var TERRA_CANNA=[
+  {week:1,stage:"Seedling",starter:0,grow:0,bloom:0,pk:0,booster:0,note:"Water only"},
+  {week:2,stage:"Seedling",starter:1,grow:0,bloom:0,pk:0,booster:0,note:"25% dose"},
+  {week:3,stage:"Veg",starter:2,grow:1,bloom:0,pk:0,booster:0,note:"Introduce Grow"},
+  {week:4,stage:"Veg",starter:0,grow:2,bloom:0,pk:0,booster:0,note:"Full Grow"},
+  {week:5,stage:"Pre-flower",starter:0,grow:1,bloom:1,pk:0,booster:0,note:"Transition week"},
+  {week:6,stage:"Flower",starter:0,grow:0,bloom:2,pk:0,booster:1,note:"Full Bloom"},
+  {week:7,stage:"Flower",starter:0,grow:0,bloom:3,pk:1,booster:1,note:"Boost PK"},
+  {week:8,stage:"Flower",starter:0,grow:0,bloom:3,pk:2,booster:1,note:"Peak flower"},
+  {week:9,stage:"Flower",starter:0,grow:0,bloom:2,pk:2,booster:1,note:"Late flower"},
+  {week:10,stage:"Flush",starter:0,grow:0,bloom:0,pk:0,booster:0,note:"Plain water flush"},
+  {week:11,stage:"Harvest",starter:0,grow:0,bloom:0,pk:0,booster:0,note:"Harvest window"},
+];
+
+// ── Light distance guide ─────────────────────────────────
+function getLightDistance(setup,stage){
+  var w=Number(setup.lightWatts)||150;
+  var distances={
+    seed:{min:60,max:80,note:"Very gentle — seedlings need soft light"},
+    seedling:{min:50,max:70,note:"Keep gentle to avoid light stress"},
+    veg:{min:40,max:60,note:"Move closer as plants strengthen"},
+    preflower:{min:35,max:50,note:"Maintain good coverage for stretch"},
+    flower:{min:30,max:45,note:"Closer for dense buds — watch for light burn"},
+    flush:{min:35,max:50,note:"Back off slightly during flush"},
+    harvest:{min:40,max:55,note:"Reduce for final ripening"}
+  };
+  var d=distances[stage.key]||distances.veg;
+  // Adjust for lower wattage
+  if(w<100){d={min:d.min+10,max:d.max+15,note:d.note+" (lower wattage = keep further)"}}
+  return d;
+}
+
+// ── Water calculator ─────────────────────────────────────
+function getWaterSchedule(setup,stage,days){
+  var medium=setup.medium||"soil";
+  var potL=Number(setup.potSize)||11;
+  var schedules={
+    seed:"2-5ml around seedling only",
+    seedling:"50-100ml every 2-3 days",
+    veg:potL+"L pot: ~"+Math.round(potL*0.3)+"–"+Math.round(potL*0.4)+"L every 2-3 days",
+    preflower:potL+"L pot: ~"+Math.round(potL*0.4)+"–"+Math.round(potL*0.5)+"L every 2 days",
+    flower:potL+"L pot: ~"+Math.round(potL*0.5)+"–"+Math.round(potL*0.6)+"L every 1-2 days",
+    flush:potL+"L pot: "+Math.round(potL*3)+"L plain water total flush",
+    harvest:"No watering"
+  };
+  return schedules[stage.key]||schedules.veg;
+}
+
+// ── Perpetual harvest calculator ────────────────────────
+function getPerpetual(plants,setup){
+  if(!plants||plants.length===0)return null;
+  var avgDays=Number(setup.avgFlowerDays)||77;
+  var targetGap=Number(setup.harvestGap)||35;
+  var startNextOn=addDays(tod(),targetGap-21);
+  var nextHarvest=null;
+  plants.forEach(function(p){
+    var days=daysSince(p.startDate);
+    var remaining=avgDays-days;
+    if(remaining>0&&(!nextHarvest||remaining<nextHarvest.remaining)){
+      nextHarvest={name:p.name,remaining:remaining,date:addDays(tod(),remaining)};
+    }
+  });
+  return{startNextOn:startNextOn,nextHarvest:nextHarvest};
+}
+
+// ── Default data ─────────────────────────────────────────
+var D=loadD()||{
+  plants:[],
+  setup:{
+    tentSize:"70x70",lightModel:"Mars Hydro FC1500",lightWatts:"150",
+    lightSchedule:"18/6",medium:"soil",potSize:"11",phing:false,
+    avgFlowerDays:"77",harvestGap:"35"
+  },
+  logs:{},
+  showAdvisor:false,advisorLoading:false,advisorText:""
+};
+if(!D.logs)D.logs={};
+
+var S={
+  tab:"plants",
+  showAddPlant:false,
+  showSetup:false,
+  showLog:false,
+  activePlantId:null,
+  showNutrients:false,
+  editingPlantId:null,
+  newPlant:{name:"",strain:"",startDate:tod(),totalDays:"77",notes:""},
+  newLog:{date:tod(),height:"",notes:"",watered:false,fed:false},
+  advisorLoading:false,advisorText:"",showAdvisor:false
+};
+
+function patch(o){Object.assign(S,o);render();}
+function upd(fn){fn(D);saveD(D);render();}
+
+function render(){
+  document.getElementById("app").innerHTML=buildApp();
+  bindEv();
+}
+
+function buildApp(){
+  var h="";
+  // Header
+  h+='<div style="padding:14px 16px 10px;background:var(--bg2);border-bottom:1px solid var(--border2);display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:100">';
+  h+='<div style="display:flex;align-items:center;gap:10px">';
+  h+='<div style="width:34px;height:34px;background:linear-gradient(135deg,#166534,#4ade80);border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:18px">🌿</div>';
+  h+='<div><div style="font-size:18px;font-weight:700;color:var(--text)"><span style="color:var(--green)">Auto</span>Grow</div>';
+  h+='<div style="font-size:10px;color:var(--text3);font-family:\'DM Mono\',monospace">Seed to Harvest</div></div></div>';
+  h+='<div style="display:flex;gap:6px">';
+  h+='<button onclick="patch({showSetup:true})" style="background:var(--bg3);border:1.5px solid var(--border2);border-radius:10px;padding:6px 10px;color:var(--text2);cursor:pointer;font-size:13px">⚙️</button>';
+  h+='<button onclick="openAdvisor()" style="background:#a78bfa15;border:1.5px solid #a78bfa30;border-radius:10px;padding:6px 10px;color:#a78bfa;cursor:pointer;font-size:13px">🧠</button>';
+  h+='</div></div>';
+  // Tabs
+  var tabs=[["plants","🌱 Plants"],["today","📋 Today"],["nutrients","🧪 Nutrients"],["perpetual","♻️ Perpetual"],["learn","📚 Learn"]];
+  h+='<div class="tbar">';
+  tabs.forEach(function(t){h+='<button onclick="patch({tab:\''+t[0]+'\'})" class="'+(S.tab===t[0]?"active":"")+'">'+t[1]+'</button>';});
+  h+='</div>';
+  // Content
+  h+='<div style="padding:14px;max-width:600px;margin:0 auto;padding-bottom:80px">';
+  if(S.tab==="plants")h+=tabPlants();
+  else if(S.tab==="today")h+=tabToday();
+  else if(S.tab==="nutrients")h+=tabNutrients();
+  else if(S.tab==="perpetual")h+=tabPerpetual();
+  else if(S.tab==="learn")h+=tabLearn();
+  h+='</div>';
+  // Modals
+  if(S.showAddPlant)h+=modalAddPlant();
+  if(S.showSetup)h+=modalSetup();
+  if(S.showLog)h+=modalLog();
+  if(S.showAdvisor)h+=modalAdvisor();
+  return h;
+}
+
+// ── PLANTS TAB ───────────────────────────────────────────
+function tabPlants(){
+  var h='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">';
+  h+='<div style="font-size:13px;color:var(--text2)">'+D.plants.length+' plant'+(D.plants.length!==1?"s":"")+'</div>';
+  h+='<button onclick="patch({showAddPlant:true})" class="btn btn-green" style="padding:9px 16px;font-size:13px">+ Add Plant</button>';
+  h+='</div>';
+  if(D.plants.length===0){
+    h+='<div style="text-align:center;padding:48px 20px;border:1.5px dashed var(--border2);border-radius:20px">';
+    h+='<div style="font-size:48px;margin-bottom:12px">🌱</div>';
+    h+='<div style="font-size:15px;font-weight:600;color:var(--text);margin-bottom:8px">No plants yet</div>';
+    h+='<div style="font-size:13px;color:var(--text3)">Add your first plant to start tracking from seed to harvest</div>';
+    h+='</div>';
+    return h;
+  }
+  D.plants.forEach(function(p){
+    var days=daysSince(p.startDate);
+    var totalDays=Number(p.totalDays)||77;
+    var stage=getStage(days,totalDays);
+    var pct=Math.min((days/totalDays)*100,100);
+    var remaining=Math.max(0,totalDays-days);
+    var dist=getLightDistance(D.setup,stage);
+    var water=getWaterSchedule(D.setup,stage,days);
+    var plantLogs=D.logs[p.id]||[];
+    var lastLog=plantLogs.length>0?plantLogs[plantLogs.length-1]:null;
+    h+='<div class="card" style="margin-bottom:12px">';
+    // Plant header
+    h+='<div style="padding:14px 16px 12px;background:linear-gradient(135deg,var(--bg2),var(--bg3))">';
+    h+='<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px">';
+    h+='<div>';
+    h+='<div style="font-size:16px;font-weight:700;color:var(--text)">'+stage.icon+' '+esc(p.name)+'</div>';
+    h+='<div style="font-size:12px;color:var(--text3);margin-top:2px;font-family:\'DM Mono\',monospace">'+esc(p.strain||"Unknown strain")+'</div>';
+    h+='</div>';
+    h+='<div style="text-align:right">';
+    h+='<div style="font-size:22px;font-weight:800;color:'+stage.color+'">Day '+days+'</div>';
+    h+='<div style="font-size:10px;color:var(--text3);font-family:\'DM Mono\',monospace">'+remaining+' days left</div>';
+    h+='</div></div>';
+    // Stage badge
+    h+='<div style="display:inline-block;background:'+stage.color+'20;border:1px solid '+stage.color+'40;border-radius:100px;padding:3px 10px;font-size:11px;font-weight:600;color:'+stage.color+';margin-bottom:10px">'+stage.name+'</div>';
+    // Progress bar
+    h+='<div class="pt" style="height:6px;margin-bottom:4px"><div class="pb" style="width:'+pct+'%;background:linear-gradient(90deg,'+stage.color+','+stage.color+'99);height:6px"></div></div>';
+    h+='<div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text3);font-family:\'DM Mono\',monospace"><span>Seed</span><span>'+Math.round(pct)+'%</span><span>Harvest</span></div>';
+    h+='</div>';
+    // Info grid
+    h+='<div style="padding:12px 16px;display:grid;grid-template-columns:1fr 1fr;gap:8px;border-bottom:1px solid var(--border)">';
+    h+=infoCell("💡","Light Distance",dist.min+"–"+dist.max+" cm");
+    h+=infoCell("💧","Water",water);
+    if(lastLog)h+=infoCell("📏","Last Height",lastLog.height?lastLog.height+"cm":"Not logged");
+    h+=infoCell("📅","Start Date",p.startDate);
+    h+='</div>';
+    // Stage tip
+    h+='<div style="padding:10px 16px;background:'+stage.color+'08;border-bottom:1px solid var(--border)">';
+    h+='<div style="font-size:11px;font-weight:600;color:'+stage.color+';margin-bottom:3px">💡 '+stage.name+' Tip</div>';
+    h+='<div style="font-size:12px;color:var(--text2);line-height:1.5">'+stage.tip+'</div>';
+    h+='</div>';
+    // Actions
+    h+='<div style="padding:10px 16px;display:flex;gap:8px">';
+    h+='<button data-pid="'+p.id+'" onclick="openLog(this.dataset.pid)" style="flex:1;background:var(--green);color:#071007;border:none;border-radius:10px;padding:9px;font-weight:600;font-size:13px;cursor:pointer">+ Log Week</button>';
+    h+='<button data-pid="'+p.id+'" onclick="deletePlant(this.dataset.pid)" style="background:var(--bg3);border:1.5px solid var(--border2);border-radius:10px;padding:9px 12px;color:var(--text3);cursor:pointer;font-size:13px">🗑️</button>';
+    h+='</div>';
+    h+='</div>';
+  });
+  return h;
+}
+
+function infoCell(icon,label,val){
+  return '<div style="background:var(--bg3);border-radius:10px;padding:8px 10px"><div style="font-size:10px;color:var(--text3);font-family:\'DM Mono\',monospace;margin-bottom:2px">'+label+'</div><div style="font-size:12px;color:var(--text);font-weight:500">'+icon+' '+esc(val)+'</div></div>';
+}
+
+// ── TODAY TAB ────────────────────────────────────────────
+function tabToday(){
+  if(D.plants.length===0)return'<div style="text-align:center;padding:48px 20px;color:var(--text3)">Add a plant first to see today\'s tasks</div>';
+  var h='<div style="font-size:13px;color:var(--text2);margin-bottom:14px">'+new Date().toDateString()+'</div>';
+  D.plants.forEach(function(p){
+    var days=daysSince(p.startDate);
+    var totalDays=Number(p.totalDays)||77;
+    var stage=getStage(days,totalDays);
+    var tips=getWeeklyTips(days,D.setup);
+    var water=getWaterSchedule(D.setup,stage,days);
+    var dist=getLightDistance(D.setup,stage);
+    var week=Math.floor(days/7)+1;
+    var nutriRow=TERRA_CANNA[Math.min(week-1,TERRA_CANNA.length-1)];
+    h+='<div class="card" style="margin-bottom:12px">';
+    h+='<div style="padding:12px 14px;background:'+stage.color+'10;border-bottom:1px solid var(--border)">';
+    h+='<div style="font-size:14px;font-weight:700;color:var(--text)">'+stage.icon+' '+esc(p.name)+'</div>';
+    h+='<div style="font-size:11px;color:'+stage.color+';font-family:\'DM Mono\',monospace">Day '+days+' | Week '+week+' | '+stage.name+'</div>';
+    h+='</div>';
+    h+='<div style="padding:12px 14px">';
+    // Checklist items
+    var tasks=[
+      {icon:"💧",title:"Water",detail:water},
+      {icon:"💡",title:"Light Distance",detail:dist.min+"–"+dist.max+"cm — "+dist.note},
+      {icon:"🌡️",title:"Environment",detail:"Temp: 22-26°C | Humidity: "+(stage.key==="flower"?"40-50%":"55-70%")},
+    ];
+    if(nutriRow&&(nutriRow.grow>0||nutriRow.bloom>0||nutriRow.starter>0)){
+      var nutriStr="";
+      if(nutriRow.starter>0)nutriStr+="Starter "+nutriRow.starter+"ml/L ";
+      if(nutriRow.grow>0)nutriStr+="Grow "+nutriRow.grow+"ml/L ";
+      if(nutriRow.bloom>0)nutriStr+="Bloom "+nutriRow.bloom+"ml/L ";
+      if(nutriRow.pk>0)nutriStr+="PK "+nutriRow.pk+"ml/L ";
+      tasks.push({icon:"🧪",title:"Nutrients",detail:nutriStr.trim()+" ("+nutriRow.note+")"});
+    }
+    tasks.forEach(function(task){
+      h+='<div style="display:flex;align-items:flex-start;gap:10px;padding:8px 0;border-bottom:1px solid var(--border)">';
+      h+='<span style="font-size:18px;flex-shrink:0">'+task.icon+'</span>';
+      h+='<div><div style="font-size:13px;font-weight:600;color:var(--text)">'+task.title+'</div>';
+      h+='<div style="font-size:12px;color:var(--text2);margin-top:2px;line-height:1.4">'+esc(task.detail)+'</div></div>';
+      h+='</div>';
+    });
+    // Weekly tips
+    if(tips.length>0){
+      h+='<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border)">';
+      h+='<div style="font-size:11px;font-weight:600;color:var(--green);margin-bottom:8px">THIS WEEK</div>';
+      tips.forEach(function(tip){
+        h+='<div style="display:flex;align-items:flex-start;gap:8px;margin-bottom:6px">';
+        h+='<span style="font-size:14px;flex-shrink:0">'+tip.icon+'</span>';
+        h+='<div style="font-size:12px;color:var(--text2);line-height:1.4">'+esc(tip.text)+'</div></div>';
+      });
+      h+='</div>';
+    }
+    h+='</div></div>';
+  });
+  return h;
+}
+
+// ── NUTRIENTS TAB ────────────────────────────────────────
+function tabNutrients(){
+  var h='<div style="margin-bottom:14px">';
+  h+='<div style="font-size:15px;font-weight:700;color:var(--text);margin-bottom:4px">Terra Canna Feed Chart</div>';
+  h+='<div style="font-size:12px;color:var(--text3)">ml per litre of water. Adjust down 25% for first feeds.</div></div>';
+  // Current week highlight
+  if(D.plants.length>0){
+    var p=D.plants[0];
+    var week=Math.floor(daysSince(p.startDate)/7)+1;
+    h+='<div style="background:var(--green)15;border:1.5px solid var(--green)30;border-radius:12px;padding:10px 14px;margin-bottom:14px;font-size:12px;color:var(--green)">📍 '+esc(p.name)+' is on Week '+week+' — highlighted below</div>';
+  }
+  var currentWeek=D.plants.length>0?Math.floor(daysSince(D.plants[0].startDate)/7)+1:0;
+  h+='<div style="display:flex;flex-direction:column;gap:6px">';
+  TERRA_CANNA.forEach(function(row){
+    var isNow=row.week===currentWeek;
+    h+='<div style="background:'+(isNow?'var(--green)15':'var(--bg2)')+';border:1.5px solid '+(isNow?'var(--green)40':'var(--border)')+';border-radius:12px;padding:11px 14px">';
+    h+='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">';
+    h+='<div style="font-size:13px;font-weight:700;color:'+(isNow?'var(--green)':'var(--text)')+'">Week '+row.week+' — '+row.stage+'</div>';
+    if(isNow)h+='<div style="font-size:10px;background:var(--green);color:#071007;border-radius:100px;padding:2px 8px;font-weight:700">NOW</div>';
+    h+='</div>';
+    if(row.starter>0||row.grow>0||row.bloom>0||row.pk>0||row.booster>0){
+      h+='<div style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:6px">';
+      if(row.starter>0)h+=nutriBadge("Starter",row.starter,"#facc15");
+      if(row.grow>0)h+=nutriBadge("Grow",row.grow,"#4ade80");
+      if(row.bloom>0)h+=nutriBadge("Bloom",row.bloom,"#a78bfa");
+      if(row.pk>0)h+=nutriBadge("PK Boost",row.pk,"#f87171");
+      if(row.booster>0)h+=nutriBadge("Booster",row.booster,"#fb923c");
+      h+='</div>';
+    }else{
+      h+='<div style="font-size:12px;color:var(--text3)">💧 Plain water only</div>';
+    }
+    h+='<div style="font-size:11px;color:var(--text3);font-family:\'DM Mono\',monospace">'+row.note+'</div>';
+    h+='</div>';
+  });
+  h+='</div>';
+  h+='<div style="margin-top:16px;background:var(--bg2);border:1.5px solid var(--border);border-radius:12px;padding:14px">';
+  h+='<div style="font-size:12px;font-weight:600;color:var(--yellow);margin-bottom:8px">💡 Beginner Tips</div>';
+  var btips=["Always start at 25-50% of recommended dose","Add nutrients to water, not water to nutrients","If leaves yellow = more nutrients. Brown tips = less","pH 6.0-6.5 for soil — a pH pen costs €10-20 and makes a big difference","Less is more — overfeeding kills more plants than underfeeding"];
+  btips.forEach(function(t){h+='<div style="font-size:12px;color:var(--text2);margin-bottom:6px;line-height:1.4">• '+t+'</div>';});
+  h+='</div>';
+  return h;
+}
+
+function nutriBadge(name,ml,col){
+  return '<div style="background:'+col+'18;border:1px solid '+col+'30;border-radius:8px;padding:3px 8px;font-size:11px;font-weight:600;color:'+col+'">'+name+' '+ml+'ml/L</div>';
+}
+
+// ── PERPETUAL TAB ────────────────────────────────────────
+function tabPerpetual(){
+  var perp=getPerpetual(D.plants,D.setup);
+  var h='<div style="margin-bottom:14px">';
+  h+='<div style="font-size:15px;font-weight:700;color:var(--text);margin-bottom:4px">Perpetual Harvest Planner</div>';
+  h+='<div style="font-size:12px;color:var(--text3)">Plan your grows for continuous monthly harvests</div></div>';
+  // Target settings
+  h+='<div class="card card-pad" style="margin-bottom:12px">';
+  h+='<div style="font-size:13px;font-weight:600;color:var(--text);margin-bottom:12px">⚙️ Your Target Settings</div>';
+  h+='<div style="display:flex;flex-direction:column;gap:10px">';
+  h+='<div><div class="lbl">Target harvest gap (days)</div>';
+  h+='<input id="p-gap" type="number" class="inp" value="'+(D.setup.harvestGap||35)+'" placeholder="35"/></div>';
+  h+='<div><div class="lbl">Average flower time (days)</div>';
+  h+='<input id="p-days" type="number" class="inp" value="'+(D.setup.avgFlowerDays||77)+'" placeholder="77"/></div>';
+  h+='<button onclick="savePerp()" class="btn btn-green" style="width:100%">Update Settings</button>';
+  h+='</div></div>';
+  if(perp){
+    // Next harvest
+    if(perp.nextHarvest){
+      h+='<div style="background:var(--green)10;border:1.5px solid var(--green)25;border-radius:14px;padding:14px;margin-bottom:12px">';
+      h+='<div style="font-size:11px;color:var(--green);font-weight:600;margin-bottom:4px">🌺 NEXT HARVEST</div>';
+      h+='<div style="font-size:16px;font-weight:700;color:var(--text)">'+esc(perp.nextHarvest.name)+'</div>';
+      h+='<div style="font-size:13px;color:var(--green);margin-top:4px">~'+perp.nextHarvest.remaining+' days away ('+perp.nextHarvest.date+')</div>';
+      h+='</div>';
+    }
+    // When to start next
+    h+='<div style="background:#fb923c10;border:1.5px solid #fb923c25;border-radius:14px;padding:14px;margin-bottom:12px">';
+    h+='<div style="font-size:11px;color:#fb923c;font-weight:600;margin-bottom:4px">🌱 START NEXT PLANT</div>';
+    h+='<div style="font-size:14px;font-weight:700;color:var(--text)">'+perp.startNextOn+'</div>';
+    h+='<div style="font-size:12px;color:var(--text2);margin-top:4px">To get a harvest every ~'+D.setup.harvestGap+' days, start your next seed on this date</div>';
+    h+='</div>';
+    // Visual timeline
+    h+='<div class="card card-pad">';
+    h+='<div style="font-size:13px;font-weight:600;color:var(--text);margin-bottom:12px">📅 Plant Timeline</div>';
+    D.plants.forEach(function(p,i){
+      var days=daysSince(p.startDate);
+      var totalDays=Number(p.totalDays)||77;
+      var stage=getStage(days,totalDays);
+      var pct=Math.min((days/totalDays)*100,100);
+      h+='<div style="margin-bottom:10px">';
+      h+='<div style="display:flex;justify-content:space-between;margin-bottom:4px">';
+      h+='<span style="font-size:12px;color:var(--text);font-weight:500">'+stage.icon+' '+esc(p.name)+'</span>';
+      h+='<span style="font-size:11px;color:'+stage.color+';font-family:\'DM Mono\',monospace">Day '+days+'/'+totalDays+'</span>';
+      h+='</div>';
+      h+='<div class="pt" style="height:8px"><div class="pb" style="width:'+pct+'%;background:linear-gradient(90deg,'+stage.color+','+stage.color+'66);height:8px"></div></div>';
+      h+='<div style="font-size:10px;color:var(--text3);margin-top:2px">'+stage.name+' — '+Math.max(0,totalDays-days)+' days to harvest</div>';
+      h+='</div>';
+    });
+    h+='</div>';
+  }else{
+    h+='<div style="text-align:center;padding:32px 20px;color:var(--text3)">Add plants to see your perpetual harvest plan</div>';
+  }
+  return h;
+}
+
+// ── LEARN TAB ────────────────────────────────────────────
+function tabLearn(){
+  var h='<div style="font-size:15px;font-weight:700;color:var(--text);margin-bottom:14px">📚 Autoflower Guide</div>';
+  var sections=[
+    {title:"What is an Autoflower?",icon:"🌱",color:"#4ade80",
+     content:"Autoflowers flower automatically based on age, not light cycle. This means they go from seed to harvest in 60-90 days regardless of how many hours of light they get. Perfect for beginners and small tents."},
+    {title:"Light Schedule",icon:"💡",color:"#facc15",
+     content:"Autos work great on 18/6 (18 hours light, 6 dark) for the whole grow. Some growers use 20/4 or even 24/0 but 18/6 is the sweet spot — gives plants rest time and saves electricity."},
+    {title:"Watering Basics",icon:"💧",color:"#60a5fa",
+     content:"The finger test: stick your finger 2cm into soil. Dry = water now. Moist = wait. Wet = definitely wait. Overwatering is the #1 beginner mistake. Yellow droopy leaves = too much water."},
+    {title:"Nutrient Deficiencies",icon:"🔍",color:"#fb923c",
+     content:"Yellow lower leaves = Nitrogen deficiency (add Grow). Purple stems = Phosphorus issue. Brown leaf tips = nutrient burn (too much, flush with plain water). When in doubt, less is more."},
+    {title:"Harvest Timing",icon:"✂️",color:"#f87171",
+     content:"Best way: get a 30x loupe or microscope. Look at trichomes (tiny crystals). Clear = too early. Cloudy white = peak THC. Amber = more body effect, THC degrading. Harvest when 70% cloudy, 10-30% amber for balanced effect."},
+    {title:"pH — Why It Matters",icon:"⚗️",color:"#a78bfa",
+     content:"Soil pH 6.0-6.5 lets roots absorb all nutrients. Wrong pH = locked out nutrients = deficiencies even if you feed correctly. A €15 pH pen and pH up/down solution fixes most feeding problems immediately."},
+    {title:"Your Setup: Mars Hydro FC1500",icon:"🔦",color:"#fb923c",
+     content:"In a 70x70cm tent, the FC1500 is ideal. During seedling: 60-80cm distance at 30-40% power. Veg: 45-60cm at 60-70% power. Flower: 35-45cm at 80-100% power. Always watch for light bleaching (white tips on top leaves)."},
+  ];
+  sections.forEach(function(s){
+    h+='<div class="card card-pad" style="margin-bottom:10px">';
+    h+='<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">';
+    h+='<span style="font-size:20px">'+s.icon+'</span>';
+    h+='<div style="font-size:13px;font-weight:700;color:'+s.color+'">'+s.title+'</div>';
+    h+='</div>';
+    h+='<div style="font-size:12px;color:var(--text2);line-height:1.6">'+s.content+'</div>';
+    h+='</div>';
+  });
+  return h;
+}
+
+// ── MODALS ───────────────────────────────────────────────
+function modalAddPlant(){
+  var h='<div class="mbg" onclick="if(event.target===this)patch({showAddPlant:false})"><div class="modal">';
+  h+='<div class="modal-handle"></div>';
+  h+='<div style="font-size:16px;font-weight:700;color:var(--text);margin-bottom:18px">🌱 Add New Plant</div>';
+  h+='<div style="display:flex;flex-direction:column;gap:12px">';
+  h+='<div><div class="lbl">Plant Name (nickname)</div><input id="ap-name" class="inp" placeholder="e.g. Girl #1, Big Berta" value="'+esc(S.newPlant.name)+'"/></div>';
+  h+='<div><div class="lbl">Strain</div><input id="ap-strain" class="inp" placeholder="e.g. Royal Dwarf, Quick One, Amnesia Haze Auto" value="'+esc(S.newPlant.strain)+'"/></div>';
+  h+='<div><div class="lbl">Start Date (seed in ground)</div><input id="ap-date" type="date" class="inp" value="'+S.newPlant.startDate+'"/></div>';
+  h+='<div><div class="lbl">Expected Total Days (check seed bank)</div><input id="ap-days" type="number" class="inp" placeholder="77" value="'+S.newPlant.totalDays+'"/></div>';
+  h+='<div><div class="lbl">Notes (optional)</div><textarea id="ap-notes" class="inp" rows="2" placeholder="Anything you want to remember..." style="resize:none">'+esc(S.newPlant.notes)+'</textarea></div>';
+  h+='<button onclick="submitAddPlant()" class="btn btn-green" style="width:100%">Start Growing 🌱</button>';
+  h+='<button onclick="patch({showAddPlant:false})" class="btn btn-outline" style="width:100%">Cancel</button>';
+  h+='</div></div></div>';
+  return h;
+}
+
+function modalSetup(){
+  var s=D.setup;
+  var h='<div class="mbg" onclick="if(event.target===this)patch({showSetup:false})"><div class="modal">';
+  h+='<div class="modal-handle"></div>';
+  h+='<div style="font-size:16px;font-weight:700;color:var(--text);margin-bottom:18px">⚙️ Grow Setup</div>';
+  h+='<div style="display:flex;flex-direction:column;gap:12px">';
+  h+='<div><div class="lbl">Light Model</div><input id="s-lm" class="inp" placeholder="e.g. Mars Hydro FC1500" value="'+esc(s.lightModel)+'"/></div>';
+  h+='<div><div class="lbl">Light Watts (approx)</div><input id="s-lw" type="number" class="inp" placeholder="150" value="'+s.lightWatts+'"/></div>';
+  h+='<div><div class="lbl">Light Schedule</div><select id="s-ls" class="inp"><option value="18/6" '+(s.lightSchedule==="18/6"?"selected":"")+'>18/6 (Recommended)</option><option value="20/4" '+(s.lightSchedule==="20/4"?"selected":"")+'>20/4</option><option value="24/0" '+(s.lightSchedule==="24/0"?"selected":"")+'>24/0 (Always on)</option></select></div>';
+  h+='<div><div class="lbl">Growing Medium</div><select id="s-med" class="inp"><option value="soil" '+(s.medium==="soil"?"selected":"")+'>Soil</option><option value="coco" '+(s.medium==="coco"?"selected":"")+'>Coco Coir</option><option value="hydro" '+(s.medium==="hydro"?"selected":"")+'>Hydro</option></select></div>';
+  h+='<div><div class="lbl">Pot Size (litres)</div><input id="s-pot" type="number" class="inp" placeholder="11" value="'+s.potSize+'"/></div>';
+  h+='<div><div class="lbl">Tent Size</div><input id="s-tent" class="inp" placeholder="70x70" value="'+esc(s.tentSize)+'"/></div>';
+  h+='<div style="display:flex;align-items:center;gap:10px;background:var(--bg3);border:1.5px solid var(--border2);border-radius:12px;padding:12px">';
+  h+='<input type="checkbox" id="s-ph" '+(s.phing?"checked":"")+' style="width:18px;height:18px;accent-color:var(--green);cursor:pointer"/>';
+  h+='<label for="s-ph" style="font-size:13px;color:var(--text);cursor:pointer">I use a pH meter</label></div>';
+  h+='<button onclick="saveSetup()" class="btn btn-green" style="width:100%">Save Setup</button>';
+  h+='</div></div></div>';
+  return h;
+}
+
+function modalLog(){
+  var p=D.plants.find(function(x){return x.id===S.activePlantId;});
+  if(!p)return "";
+  var days=daysSince(p.startDate);
+  var stage=getStage(days,Number(p.totalDays)||77);
+  var h='<div class="mbg" onclick="if(event.target===this)patch({showLog:false})"><div class="modal">';
+  h+='<div class="modal-handle"></div>';
+  h+='<div style="font-size:16px;font-weight:700;color:var(--text);margin-bottom:4px">📋 Log Week</div>';
+  h+='<div style="font-size:12px;color:var(--text3);margin-bottom:18px">'+esc(p.name)+' — Day '+days+' — '+stage.name+'</div>';
+  h+='<div style="display:flex;flex-direction:column;gap:12px">';
+  h+='<div><div class="lbl">Date</div><input id="lg-date" type="date" class="inp" value="'+S.newLog.date+'"/></div>';
+  h+='<div><div class="lbl">Height (cm)</div><input id="lg-height" type="number" class="inp" placeholder="e.g. 25" value="'+S.newLog.height+'"/></div>';
+  h+='<div style="display:flex;gap:10px">';
+  h+='<label style="flex:1;background:var(--bg3);border:1.5px solid var(--border2);border-radius:12px;padding:11px;display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="lg-watered" style="width:16px;height:16px;accent-color:var(--blue)"/> <span style="font-size:13px;color:var(--text)">💧 Watered</span></label>';
+  h+='<label style="flex:1;background:var(--bg3);border:1.5px solid var(--border2);border-radius:12px;padding:11px;display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="lg-fed" style="width:16px;height:16px;accent-color:var(--green)"/> <span style="font-size:13px;color:var(--text)">🧪 Fed</span></label>';
+  h+='</div>';
+  h+='<div><div class="lbl">Notes / Observations</div><textarea id="lg-notes" class="inp" rows="3" placeholder="How does she look? Any issues? Changes made?" style="resize:none"></textarea></div>';
+  h+='<button onclick="submitLog()" class="btn btn-green" style="width:100%">Save Log Entry</button>';
+  h+='</div></div></div>';
+  return h;
+}
+
+function modalAdvisor(){
+  var h='<div class="mbg" onclick="if(event.target===this)patch({showAdvisor:false})"><div class="modal">';
+  h+='<div class="modal-handle"></div>';
+  h+='<div style="font-size:16px;font-weight:700;color:var(--text);margin-bottom:4px">🧠 AI Grow Advisor</div>';
+  if(!S.advisorLoading&&!S.advisorText){
+    h+='<div style="font-size:12px;color:var(--text3);margin-bottom:20px">Tell me about your plants and I will advise you</div>';
+    // Summary of plants
+    if(D.plants.length>0){
+      h+='<div style="background:#a78bfa10;border:1.5px solid #a78bfa25;border-radius:12px;padding:12px;margin-bottom:16px">';
+      D.plants.forEach(function(p){
+        var days=daysSince(p.startDate);
+        var stage=getStage(days,Number(p.totalDays)||77);
+        h+='<div style="font-size:12px;color:#a78bfa;margin-bottom:4px">'+stage.icon+' '+esc(p.name)+' — Day '+days+' — '+stage.name+'</div>';
+      });
+      h+='</div>';
+    }
+    h+='<button onclick="runAdvisor()" style="background:linear-gradient(135deg,#a78bfa,#7c6dfa);color:#fff;border:none;border-radius:14px;padding:14px;cursor:pointer;font-weight:600;font-size:14px;width:100%">Analyze My Grow 🌿</button>';
+  }else if(S.advisorLoading){
+    h+='<div style="text-align:center;padding:32px"><div style="font-size:32px;margin-bottom:12px">🌿</div>';
+    h+='<div style="font-size:13px;color:var(--green)">Analyzing your plants...</div></div>';
+  }else{
+    h+='<div style="background:#a78bfa08;border:1.5px solid #a78bfa20;border-radius:12px;padding:14px;margin-bottom:14px;font-size:13px;color:var(--text2);line-height:1.7;white-space:pre-wrap;max-height:300px;overflow-y:auto">'+esc(S.advisorText)+'</div>';
+    h+='<button onclick="S.advisorText=\'\';S.advisorLoading=false;render()" style="background:var(--bg3);border:1.5px solid var(--border2);border-radius:12px;padding:11px;cursor:pointer;color:var(--text2);font-size:13px;width:100%;margin-bottom:8px">Ask Again</button>';
+    h+='<button onclick="patch({showAdvisor:false})" class="btn btn-green" style="width:100%">Done</button>';
+  }
+  h+='</div></div>';
+  return h;
+}
+
+// ── Events & Actions ─────────────────────────────────────
+function bindEv(){}
+
+function submitAddPlant(){
+  var name=(document.getElementById("ap-name")||{}).value||"";name=name.trim();
+  var strain=(document.getElementById("ap-strain")||{}).value||"";
+  var startDate=(document.getElementById("ap-date")||{}).value||tod();
+  var totalDays=(document.getElementById("ap-days")||{}).value||"77";
+  var notes=(document.getElementById("ap-notes")||{}).value||"";
+  if(!name){showToast("Enter a plant name","#f87171");return;}
+  var p={id:uid(),name:name,strain:strain,startDate:startDate,totalDays:totalDays,notes:notes};
+  D.plants.push(p);
+  if(!D.logs[p.id])D.logs[p.id]=[];
+  saveD(D);patch({showAddPlant:false,newPlant:{name:"",strain:"",startDate:tod(),totalDays:"77",notes:""}});
+  showToast("🌱 "+name+" added! Happy growing!");
+}
+
+function saveSetup(){
+  D.setup.lightModel=(document.getElementById("s-lm")||{}).value||D.setup.lightModel;
+  D.setup.lightWatts=(document.getElementById("s-lw")||{}).value||D.setup.lightWatts;
+  D.setup.lightSchedule=(document.getElementById("s-ls")||{}).value||D.setup.lightSchedule;
+  D.setup.medium=(document.getElementById("s-med")||{}).value||D.setup.medium;
+  D.setup.potSize=(document.getElementById("s-pot")||{}).value||D.setup.potSize;
+  D.setup.tentSize=(document.getElementById("s-tent")||{}).value||D.setup.tentSize;
+  D.setup.phing=document.getElementById("s-ph")&&document.getElementById("s-ph").checked;
+  saveD(D);patch({showSetup:false});showToast("Setup saved!");
+}
+
+function openLog(pid){patch({showLog:true,activePlantId:pid,newLog:{date:tod(),height:"",notes:"",watered:false,fed:false}});}
+
+function submitLog(){
+  var pid=S.activePlantId;if(!pid)return;
+  var date=(document.getElementById("lg-date")||{}).value||tod();
+  var height=(document.getElementById("lg-height")||{}).value||"";
+  var notes=(document.getElementById("lg-notes")||{}).value||"";
+  var watered=document.getElementById("lg-watered")&&document.getElementById("lg-watered").checked;
+  var fed=document.getElementById("lg-fed")&&document.getElementById("lg-fed").checked;
+  if(!D.logs[pid])D.logs[pid]=[];
+  D.logs[pid].push({id:uid(),date:date,height:height,notes:notes,watered:watered,fed:fed});
+  saveD(D);patch({showLog:false});showToast("Log entry saved!");
+}
+
+function deletePlant(pid){
+  D.plants=D.plants.filter(function(p){return p.id!==pid;});
+  delete D.logs[pid];
+  saveD(D);render();showToast("Plant removed","#f87171");
+}
+
+function savePerp(){
+  D.setup.harvestGap=(document.getElementById("p-gap")||{}).value||"35";
+  D.setup.avgFlowerDays=(document.getElementById("p-days")||{}).value||"77";
+  saveD(D);render();showToast("Perpetual settings saved!");
+}
+
+function openAdvisor(){patch({showAdvisor:true,advisorLoading:false,advisorText:""});}
+
+async function runAdvisor(){
+  patch({advisorLoading:true,advisorText:""});
+  var nl="\n";
+  var summary="GROW SETUP:"+nl;
+  summary+="Light: "+D.setup.lightModel+" ("+D.setup.lightWatts+"W) | Schedule: "+D.setup.lightSchedule+nl;
+  summary+="Tent: "+D.setup.tentSize+" | Medium: "+D.setup.medium+" | Pot: "+D.setup.potSize+"L"+nl;
+  summary+="pH monitoring: "+(D.setup.phing?"Yes":"No")+nl+nl;
+  if(D.plants.length>0){
+    summary+="PLANTS:"+nl;
+    D.plants.forEach(function(p){
+      var days=daysSince(p.startDate);
+      var stage=getStage(days,Number(p.totalDays)||77);
+      var logs=D.logs[p.id]||[];
+      summary+=p.name+" ("+p.strain+") — Day "+days+" — "+stage.name+nl;
+      if(logs.length>0){
+        var last=logs[logs.length-1];
+        summary+="  Last log: height="+( last.height||"not recorded")+"cm, watered="+last.watered+", notes="+( last.notes||"none")+nl;
+      }
+    });
+  }
+  var prompt="You are an expert autoflower cannabis grower and nutrient advisor. The user is a beginner with a "+D.setup.tentSize+"cm tent and "+D.setup.lightModel+". Analyze their grow data and give specific beginner-friendly advice. Be encouraging, practical, and specific. Cover: current plant health based on stage, what to do this week, any concerns, and one tip they might not know. Keep it conversational and clear. Data:"+nl+nl+summary;
+  try{
+    var resp=await fetch("https://api.anthropic.com/v1/messages",{
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:800,messages:[{role:"user",content:prompt}]})
+    });
+    var data=await resp.json();
+    var text=data.content&&data.content[0]?data.content[0].text:"Could not get advice right now.";
+    patch({advisorLoading:false,advisorText:text});
+  }catch(e){
+    patch({advisorLoading:false,advisorText:"Could not connect. Check your internet and try again."});
+  }
+}
+
+render();
+</script>
+</body>
+</html>
