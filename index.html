@@ -95,17 +95,79 @@ function addDays(dateStr,n){var d=new Date(dateStr);d.setDate(d.getDate()+n);ret
 function daysBetween(a,b){return Math.round((new Date(b)-new Date(a))/86400000);}
 function plantTotalDays(p){if(p.harvestDate)return daysBetween(p.startDate,p.harvestDate);return Number(p.totalDays)||77;}
 
-// ── Stage calculator ─────────────────────────────────────
-function getStage(days,totalDays){
+// ── Stage calculator (cannabis - has a hard life cycle) ──
+function getStageCannabis(days,totalDays,isCutting){
   totalDays=totalDays||77;
-  if(days<=3)return{name:"Germination",key:"seed",icon:"🌰",color:"#facc15",tip:"Keep moist and warm 20-25°C. No nutrients. No direct light needed yet."};
-  if(days<=14)return{name:"Seedling",key:"seedling",icon:"🌱",color:"#86efac",tip:"Gentle light 18/6. Water sparingly. No nutrients yet. Watch for first true leaves."};
+  if(!isCutting){
+    if(days<=3)return{name:"Germination",key:"seed",icon:"🌰",color:"#facc15",tip:"Keep moist and warm 20-25°C. No nutrients. No direct light needed yet."};
+    if(days<=14)return{name:"Seedling",key:"seedling",icon:"🌱",color:"#86efac",tip:"Gentle light 18/6. Water sparingly. No nutrients yet. Watch for first true leaves."};
+  }else{
+    if(days<=10)return{name:"Rooting (cutting)",key:"rooting",icon:"🌱",color:"#86efac",tip:"Keep humidity high while roots establish. No nutrients until roots form, then quarter-strength feed."};
+  }
   if(days<=28)return{name:"Vegetative",key:"veg",icon:"🌿",color:"#4ade80",tip:"18/6 light. Start light nutrients. Water when top inch of soil is dry."};
   if(days<=35)return{name:"Pre-Flower",key:"preflower",icon:"🌸",color:"#fb923c",tip:"Auto-flower triggering. Increase P+K. Watch for white pistils. Stretch incoming."};
   if(days<=(totalDays-10))return{name:"Flowering",key:"flower",icon:"🌺",color:"#a78bfa",tip:"Full bloom nutrients. Watch for amber trichomes near harvest. Maintain humidity below 50%."};
   if(days<=(totalDays-3))return{name:"Flush",key:"flush",icon:"💧",color:"#60a5fa",tip:"Plain pH water only. Remove all nutrients. Flush 3-7 days before harvest."};
   return{name:"Harvest Ready",key:"harvest",icon:"✂️",color:"#f87171",tip:"Check trichomes: mostly cloudy = peak THC. Amber trichomes = more body effect."};
 }
+
+// ── Basil: no hard life cycle. Grows to established, then harvest-as-needed forever ──
+function getStageBasil(days,isCutting){
+  if(!isCutting){
+    if(days<=7)return{name:"Germination",key:"seed",icon:"🌰",color:"#facc15",tip:"Keep moist and warm. No nutrients needed yet."};
+    if(days<=21)return{name:"Seedling",key:"seedling",icon:"🌱",color:"#86efac",tip:"Gentle light. Water sparingly. Light feed can start around week 3."};
+  }else{
+    if(days<=7)return{name:"Rooting (cutting)",key:"rooting",icon:"🌱",color:"#86efac",tip:"Keep humidity high while roots establish. No nutrients yet."};
+  }
+  return{name:"Established — harvest as needed",key:"established",icon:"🌿",color:"#4ade80",tip:"No further life-cycle stages. Pinch top leaves regularly to keep it bushy and producing. Harvest whenever you need it."};
+}
+
+// ── Tomato: matures once, then ongoing fruit cycles indefinitely ──
+function getStageTomato(days,isCutting,fruitingStartDate){
+  if(!isCutting){
+    if(days<=10)return{name:"Germination",key:"seed",icon:"🌰",color:"#facc15",tip:"Keep moist and warm. No nutrients yet."};
+    if(days<=21)return{name:"Seedling",key:"seedling",icon:"🌱",color:"#86efac",tip:"Gentle light. Light feed can start around week 3."};
+  }else{
+    if(days<=10)return{name:"Rooting (cutting)",key:"rooting",icon:"🌱",color:"#86efac",tip:"Keep humidity high while roots establish."};
+  }
+  if(days<=42)return{name:"Vegetative — vine training",key:"veg",icon:"🌿",color:"#4ade80",tip:"Top after 4-5 nodes. Weave vines horizontally under the net."};
+  if(fruitingStartDate){
+    var fDays=daysSince(fruitingStartDate);
+    return{name:"Producing (fruiting "+fDays+"d)",key:"producing",icon:"🍅",color:"#fb923c",tip:"No further life-cycle stages. Ongoing fruit sets — keep feeding steady, harvest tomatoes as they ripen."};
+  }
+  return{name:"Flowering — fruit set incoming",key:"flowerset",icon:"🌸",color:"#fb923c",tip:"First flowers forming. Once you see fruit, mark 'Fruiting Started' on this plant."};
+}
+
+// ── Dispatcher: routes to the right stage logic by plant type ──
+// ── Generic static/forever plant — for any type marked isStatic ──
+function getStageStatic(days,isCutting){
+  if(!isCutting){
+    if(days<=10)return{name:"Germination",key:"seed",icon:"🌰",color:"#facc15",tip:"Keep moist and warm. No nutrients yet."};
+    if(days<=21)return{name:"Seedling",key:"seedling",icon:"🌱",color:"#86efac",tip:"Gentle light. Light feed can start around week 3."};
+  }else{
+    if(days<=10)return{name:"Rooting (cutting)",key:"rooting",icon:"🌱",color:"#86efac",tip:"Keep humidity high while roots establish. No nutrients yet."};
+  }
+  return{name:"Established — ongoing",key:"established",icon:"🌿",color:"#4ade80",tip:"No further life-cycle stages. This plant lives in the tent — feed lightly and harvest as needed."};
+}
+
+function getStageFor(plant,days,totalDays){
+  var type=plant.plantType||"cannabis";
+  if(plant.isStatic&&type!=="basil"&&type!=="tomato")return getStageStatic(days,plant.isCutting);
+  if(type==="basil")return getStageBasil(days,plant.isCutting);
+  if(type==="tomato")return getStageTomato(days,plant.isCutting,plant.fruitingStartDate);
+  return getStageCannabis(days,totalDays,plant.isCutting);
+}
+
+// Shared check: is this plant past its growth phase and now in ongoing/no-harvest-cycle mode?
+function plant_isOngoing(p,stage){
+  if(p.plantType==="basil"&&stage.key==="established")return true;
+  if(p.plantType==="tomato"&&stage.key==="producing")return true;
+  if(p.isStatic&&stage.key==="established")return true;
+  return false;
+}
+
+// Back-compat: old call sites that only know cannabis logic
+function getStage(days,totalDays){return getStageCannabis(days,totalDays,false);}
 
 function getWeeklyTips(days,setup){
   var week=Math.floor(days/7)+1;
@@ -136,7 +198,93 @@ var TERRA_CANNA=[
   {week:11,stage:"Harvest",starter:0,grow:0,bloom:0,pk:0,booster:0,note:"Harvest window"},
 ];
 
-// ── RQS Autoflower strain database ───────────────────────
+// ── Tomato feed chart (lighter N, steady through fruiting) ──
+var TOMATO_FEED=[
+  {week:1,stage:"Seedling",starter:0,grow:0,bloom:0,pk:0,booster:0,note:"Water only"},
+  {week:2,stage:"Seedling",starter:1,grow:0,bloom:0,pk:0,booster:0,note:"Light starter"},
+  {week:3,stage:"Veg",starter:0,grow:1,bloom:0,pk:0,booster:0,note:"Building roots"},
+  {week:4,stage:"Veg",starter:0,grow:2,bloom:0,pk:0,booster:0,note:"Vine growth"},
+  {week:5,stage:"Veg",starter:0,grow:2,bloom:0,pk:0,booster:0,note:"Keep weaving vines"},
+  {week:6,stage:"Flower",starter:0,grow:1,bloom:1,pk:0,booster:0,note:"First flowers forming"},
+  {week:7,stage:"Flower",starter:0,grow:0,bloom:2,pk:1,booster:0,note:"Fruit set"},
+  {week:8,stage:"Fruiting",starter:0,grow:0,bloom:2,pk:1,booster:1,note:"Fruit fill"},
+  {week:9,stage:"Fruiting",starter:0,grow:0,bloom:2,pk:1,booster:1,note:"Continue steady feed"},
+  {week:10,stage:"Fruiting",starter:0,grow:0,bloom:2,pk:1,booster:1,note:"Repeat — tomatoes feed long-term"},
+];
+function getTomatoWeek(days){
+  var wk=Math.floor(days/7)+1;
+  if(wk>TOMATO_FEED.length)wk=TOMATO_FEED.length; // plateau, keep feeding at fruiting rate
+  var row=TOMATO_FEED.find(function(r){return r.week===wk;});
+  return row||TOMATO_FEED[TOMATO_FEED.length-1];
+}
+
+// ── Basil feed chart (flat, minimal — leafy herb, not flowering for yield) ──
+var BASIL_FEED=[
+  {week:1,stage:"Seedling",starter:0,grow:0,bloom:0,pk:0,booster:0,note:"Water only"},
+  {week:2,stage:"Seedling",starter:0,grow:0,bloom:0,pk:0,booster:0,note:"Water only"},
+  {week:3,stage:"Growing",starter:0,grow:1,bloom:0,pk:0,booster:0,note:"Light feed — just needs to grow"},
+  {week:4,stage:"Growing",starter:0,grow:1,bloom:0,pk:0,booster:0,note:"Same light feed, keep harvesting leaves"},
+];
+function getBasilWeek(days){
+  var wk=Math.floor(days/7)+1;
+  if(wk>BASIL_FEED.length)wk=BASIL_FEED.length; // plateau — basil doesn't need escalating doses
+  var row=BASIL_FEED.find(function(r){return r.week===wk;});
+  return row||BASIL_FEED[BASIL_FEED.length-1];
+}
+
+// ── Generic feed plan dispatcher by plant type ───────────
+var PLANT_TYPES=[
+  {key:"cannabis",label:"🌿 Cannabis",icon:"🌿",growthPattern:"lifecycle",defaultTotalDays:77,
+    desc:"Has a hard life cycle: seed/clone → veg → flower → harvest, then the plant is done. Feeds escalate through veg and bloom, then flush before harvest."},
+  {key:"tomato",label:"🍅 Tomato",icon:"🍅",growthPattern:"static",defaultTotalDays:120,
+    desc:"Grows once to maturity, then keeps fruiting indefinitely. No real harvest day — the plant stays in the tent and you pick tomatoes as they ripen. Feed stays low-N high-P/K once fruiting starts, repeated every week — not escalating."},
+  {key:"basil",label:"🌱 Basil",icon:"🌱",growthPattern:"static",defaultTotalDays:60,
+    desc:"Grows once to established size, then you harvest leaves as needed forever — no flowering/harvest cycle. Needs very little feed; too much hurts flavor."},
+  {key:"other",label:"🪴 Other",icon:"🪴",growthPattern:"lifecycle",defaultTotalDays:77,
+    desc:"Unknown type — defaults to a generic lifecycle using the cannabis feed chart until configured otherwise."}
+];
+function plantTypeMeta(key){return PLANT_TYPES.find(function(x){return x.key===key;})||PLANT_TYPES[0];}
+function plantTypeLabel(key){return plantTypeMeta(key).label;}
+function getFeedPlanFor(plant,days){
+  var type=plant.plantType||"cannabis";
+  if(type==="tomato")return getTomatoWeek(days);
+  if(type==="basil")return getBasilWeek(days);
+  if(type==="cannabis"&&plant.isCutting&&days<=10){
+    return{week:0,stage:"Rooting",starter:0,grow:0,bloom:0,pk:0,booster:0,note:"Water only — no roots to take up nutrients yet"};
+  }
+  return getTerraCannaWeek(days); // cannabis + other default to cannabis chart
+}
+
+// ── Learning layer: average past feed doses logged at this stage ──
+function getLearnedFeed(plant,days){
+  var logs=(D.logs[plant.id]||[]).filter(function(l){return l.fed&&l.nutrients&&l.nutrients.length;});
+  if(!logs.length)return null;
+  // group by week-of-grow so we compare same-stage history
+  var targetWeek=Math.floor(days/7)+1;
+  var sameStage=logs.filter(function(l){
+    var logDays=daysSince(l.date)>=0?Math.floor((new Date(l.date)-new Date(plant.startDate))/86400000):0;
+    var logWeek=Math.floor(logDays/7)+1;
+    return logWeek===targetWeek;
+  });
+  var pool=sameStage.length?sameStage:logs;
+  // flatten nutrient entries, average ml/L per nutrient name
+  var byName={};
+  pool.forEach(function(l){
+    l.nutrients.forEach(function(n){
+      if(!n.name)return;
+      var key=n.name.trim().toLowerCase();
+      if(!byName[key])byName[key]={name:n.name,total:0,count:0};
+      byName[key].total+=Number(n.mlPerL)||0;
+      byName[key].count++;
+    });
+  });
+  var avgList=Object.keys(byName).map(function(k){
+    var b=byName[k];
+    return{name:b.name,avgMlPerL:Math.round((b.total/b.count)*10)/10};
+  });
+  if(!avgList.length)return null;
+  return{matchedStage:sameStage.length>0,sampleSize:pool.length,nutrients:avgList};
+}
 var RQS_STRAINS=[
   {name:"Quick One",days:60},
   {name:"Easy Bud",days:60},
@@ -356,7 +504,7 @@ var S={
   activePlantId:null,
   showNutrients:false,
   editingPlantId:null,
-  newPlant:{name:"",strain:"",startDate:tod(),totalDays:"77",harvestDate:addDays(tod(),77),notes:"",position:"",isPerpetual:false},
+  newPlant:{name:"",strain:"",plantType:"cannabis",startDate:tod(),totalDays:"77",harvestDate:addDays(tod(),77),notes:"",position:"",isPerpetual:false,isCutting:false},
   newLog:{date:tod(),height:"",notes:"",watered:false,fed:false},
   newFeed:{date:tod(),nutrients:[{name:"",mlPerL:""}],waterAmount:"",notes:""},
   newQuickNote:{date:tod(),notes:""},
@@ -428,9 +576,10 @@ function tabPlants(){
   D.plants.filter(function(p){return !p.harvested;}).forEach(function(p){
     var days=daysSince(p.startDate);
     var totalDays=plantTotalDays(p);
-    var stage=getStage(days,totalDays);
-    var pct=Math.min((days/totalDays)*100,100);
-    var remaining=Math.max(0,totalDays-days);
+    var stage=getStageFor(p,days,totalDays);
+    var isOngoing=plant_isOngoing(p,stage);
+    var remaining=isOngoing?null:Math.max(0,totalDays-days);
+    var pct=isOngoing?100:Math.min((days/totalDays)*100,100);
     var dist=getLightDistance(D.setup,stage);
     var water=getWaterSchedule(D.setup,stage,days);
     var plantLogs=D.logs[p.id]||[];
@@ -445,13 +594,15 @@ function tabPlants(){
     h+='</div>';
     h+='<div style="text-align:right">';
     h+='<div style="font-size:22px;font-weight:800;color:'+stage.color+'">Day '+days+'</div>';
-    h+='<div style="font-size:10px;color:var(--text3);font-family:\'DM Mono\',monospace">'+remaining+' days left</div>';
+    h+='<div style="font-size:10px;color:var(--text3);font-family:\'DM Mono\',monospace">'+(isOngoing?"ongoing growth":remaining+" days left")+'</div>';
     h+='</div></div>';
     // Stage badge
     h+='<div style="display:inline-block;background:'+stage.color+'20;border:1px solid '+stage.color+'40;border-radius:100px;padding:3px 10px;font-size:11px;font-weight:600;color:'+stage.color+';margin-bottom:10px">'+stage.name+'</div>';
-    // Progress bar
-    h+='<div class="pt" style="height:6px;margin-bottom:4px"><div class="pb" style="width:'+pct+'%;background:linear-gradient(90deg,'+stage.color+','+stage.color+'99);height:6px"></div></div>';
-    h+='<div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text3);font-family:\'DM Mono\',monospace"><span>Seed</span><span>'+Math.round(pct)+'%</span><span>Harvest</span></div>';
+    // Progress bar (skipped for ongoing-growth plants)
+    if(!isOngoing){
+      h+='<div class="pt" style="height:6px;margin-bottom:4px"><div class="pb" style="width:'+pct+'%;background:linear-gradient(90deg,'+stage.color+','+stage.color+'99);height:6px"></div></div>';
+      h+='<div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text3);font-family:\'DM Mono\',monospace"><span>Seed</span><span>'+Math.round(pct)+'%</span><span>Harvest</span></div>';
+    }
     h+='</div>';
     // Info grid
     h+='<div style="padding:12px 16px;display:grid;grid-template-columns:1fr 1fr;gap:8px;border-bottom:1px solid var(--border)">';
@@ -534,12 +685,12 @@ function tabMap(){
     var label=zoneLabel(key)+(locked?' 🔒':"");
     var border=active?"var(--green)":"var(--border)";
     var bg=active?"#4ade8015":"var(--bg2)";
-    var name=p?(esc(p.name)+(p.isPerpetual?' ♻️':"")):(locked?"— perpetual, empty —":"— empty —");
+    var name=p?(PLANT_TYPES.find(function(t){return t.key===(p.plantType||"cannabis");}).icon+" "+esc(p.name)+(p.isPerpetual?' ♻️':"")):(locked?"— perpetual, empty —":"— empty —");
     var sub=p?esc(p.strain||""):"Tap to assign";
     var feedTag="";
     if(p){
       var d=daysSince(p.startDate);
-      var t=getTerraCannaWeek(d);
+      var t=getFeedPlanFor(p,d);
       var mix=[["S",t.starter],["G",t.grow],["B",t.bloom],["PK",t.pk],["Bo",t.booster]].filter(function(m){return m[1]>0;}).map(function(m){return m[0]+m[1];}).join(" ");
       feedTag='<div style="font-size:9px;color:var(--green);font-family:\'DM Mono\',monospace;margin-top:2px">'+(mix||"water only")+'</div>';
     }
@@ -582,20 +733,33 @@ function tabMap(){
   }else{
     var days=daysSince(sel.startDate);
     var totalDays=plantTotalDays(sel);
-    var stage=getStage(days,totalDays);
+    var stage=getStageFor(sel,days,totalDays);
     var water=getWaterSchedule(D.setup,stage,days);
-    var tc=getTerraCannaWeek(days);
+    var tc=getFeedPlanFor(sel,days);
+    var typeLbl=plantTypeLabel(sel.plantType);
+    var learned=getLearnedFeed(sel,days);
     h+='<div style="font-size:16px;font-weight:700;color:var(--text)">'+stage.icon+' '+esc(sel.name)+'</div>';
-    h+='<div style="font-size:12px;color:var(--text3);margin-bottom:10px;font-family:\'DM Mono\',monospace">'+esc(sel.strain||"Unknown strain")+' · Day '+days+'</div>';
+    h+='<div style="font-size:12px;color:var(--text3);margin-bottom:10px;font-family:\'DM Mono\',monospace">'+typeLbl+' · '+esc(sel.strain||"Unknown variety")+' · Day '+days+'</div>';
     h+='<div style="display:inline-block;background:'+stage.color+'20;border:1px solid '+stage.color+'40;border-radius:100px;padding:3px 10px;font-size:11px;font-weight:600;color:'+stage.color+';margin-bottom:12px">'+stage.name+'</div>';
+    if(sel.plantType==="tomato"&&stage.key==="flowerset"){
+      h+='<button data-pid="'+sel.id+'" onclick="markFruitingStarted(this.dataset.pid)" style="display:block;margin-bottom:12px;background:#fb923c15;border:1px solid #fb923c30;border-radius:10px;padding:8px;font-size:12px;font-weight:600;color:#fb923c;cursor:pointer;width:100%">🍅 Mark Fruiting Started</button>';
+    }
     h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">';
     h+=infoCell("💧","Water",water);
-    h+=infoCell("🧪","Terra Canna","Wk"+tc.week+" "+tc.note);
+    h+=infoCell("🧪","Suggested","Wk"+tc.week+" "+tc.note);
     h+='</div>';
-    h+='<div style="background:var(--bg3);border-radius:10px;padding:10px;margin-bottom:12px">';
-    h+='<div style="font-size:10px;color:var(--text3);font-family:\'DM Mono\',monospace;margin-bottom:4px">FEED MIX (per L, this week)</div>';
+    h+='<div style="background:var(--bg3);border-radius:10px;padding:10px;margin-bottom:8px">';
+    h+='<div style="font-size:10px;color:var(--text3);font-family:\'DM Mono\',monospace;margin-bottom:4px">SUGGESTED MIX (per L, this week)</div>';
     h+='<div style="font-size:12px;color:var(--text2)">Starter '+tc.starter+' · Grow '+tc.grow+' · Bloom '+tc.bloom+' · PK '+tc.pk+' · Booster '+tc.booster+'</div>';
     h+='</div>';
+    if(learned){
+      h+='<div style="background:#a78bfa15;border:1px solid #a78bfa30;border-radius:10px;padding:10px;margin-bottom:12px">';
+      h+='<div style="font-size:10px;color:#a78bfa;font-family:\'DM Mono\',monospace;margin-bottom:4px">🧠 LEARNED FROM YOUR HISTORY ('+learned.sampleSize+' feed'+(learned.sampleSize>1?"s":"")+(learned.matchedStage?" at this stage":" — overall avg")+')</div>';
+      h+='<div style="font-size:12px;color:var(--text2)">'+learned.nutrients.map(function(n){return esc(n.name)+" "+n.avgMlPerL+"ml/L";}).join(" · ")+'</div>';
+      h+='</div>';
+    }else{
+      h+='<div style="margin-bottom:12px"></div>';
+    }
     var plog=D.logs[sel.id]||[];
     var last=plog.length?plog[plog.length-1]:null;
     if(last){
@@ -622,7 +786,7 @@ function tabToday(){
   D.plants.filter(function(p){return !p.harvested;}).forEach(function(p){
     var days=daysSince(p.startDate);
     var totalDays=plantTotalDays(p);
-    var stage=getStage(days,totalDays);
+    var stage=getStageFor(p,days,totalDays);
     var tips=getWeeklyTips(days,D.setup);
     var water=getWaterSchedule(D.setup,stage,days);
     var dist=getLightDistance(D.setup,stage);
@@ -745,7 +909,7 @@ function tabPerpetual(){
       h+='<span style="font-size:13px;color:var(--text3)">Slot '+(o.idx+1)+' — empty</span>';
       h+='<span style="font-size:11px;color:var(--green);font-weight:600">Plant now 🌱</span></div>';
     }else{
-      var stage=getStage(daysSince(o.plant.startDate),plantTotalDays(o.plant));
+      var stage=getStageFor(o.plant,daysSince(o.plant.startDate),plantTotalDays(o.plant));
       h+='<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--border)">';
       h+='<span style="font-size:13px;color:var(--text)">Slot '+(o.idx+1)+' — '+stage.icon+' '+esc(o.plant.name)+'</span>';
       h+='<span style="font-size:11px;color:'+stage.color+';font-family:\'DM Mono\',monospace">'+o.remaining+'d left</span></div>';
@@ -775,15 +939,18 @@ function tabPerpetual(){
     D.plants.filter(function(p){return !p.harvested;}).forEach(function(p){
       var days=daysSince(p.startDate);
       var totalDays=plantTotalDays(p);
-      var stage=getStage(days,totalDays);
-      var pct=Math.min((days/totalDays)*100,100);
+      var stage=getStageFor(p,days,totalDays);
+      var isOngoing=plant_isOngoing(p,stage);
+      var pct=isOngoing?100:Math.min((days/totalDays)*100,100);
       h+='<div style="margin-bottom:10px">';
       h+='<div style="display:flex;justify-content:space-between;margin-bottom:4px">';
       h+='<span style="font-size:12px;color:var(--text);font-weight:500">'+stage.icon+' '+esc(p.name)+'</span>';
-      h+='<span style="font-size:11px;color:'+stage.color+';font-family:\'DM Mono\',monospace">Day '+days+'/'+totalDays+'</span>';
+      h+='<span style="font-size:11px;color:'+stage.color+';font-family:\'DM Mono\',monospace">'+(isOngoing?"Day "+days:"Day "+days+'/'+totalDays)+'</span>';
       h+='</div>';
-      h+='<div class="pt" style="height:8px"><div class="pb" style="width:'+pct+'%;background:linear-gradient(90deg,'+stage.color+','+stage.color+'66);height:8px"></div></div>';
-      h+='<div style="font-size:10px;color:var(--text3);margin-top:2px">'+stage.name+' — harvest '+(p.harvestDate||addDays(p.startDate,totalDays))+'</div>';
+      if(!isOngoing){
+        h+='<div class="pt" style="height:8px"><div class="pb" style="width:'+pct+'%;background:linear-gradient(90deg,'+stage.color+','+stage.color+'66);height:8px"></div></div>';
+      }
+      h+='<div style="font-size:10px;color:var(--text3);margin-top:2px">'+stage.name+(isOngoing?"":' — harvest '+(p.harvestDate||addDays(p.startDate,totalDays)))+'</div>';
       h+='</div>';
     });
     h+='</div>';
@@ -831,8 +998,12 @@ function modalAddPlant(){
   h+='<div style="font-size:16px;font-weight:700;color:var(--text);margin-bottom:18px">🌱 Add New Plant</div>';
   h+='<div style="display:flex;flex-direction:column;gap:12px">';
   h+='<div><div class="lbl">Plant Name (nickname)</div><input id="ap-name" class="inp" placeholder="e.g. Girl #1, Big Berta" value="'+esc(S.newPlant.name)+'"/></div>';
-  h+='<div><div class="lbl">Strain</div><select id="ap-strain" class="inp" onchange="onStrainPick()"><option value="">— Select RQS strain —</option>'+RQS_STRAINS.map(function(s){return '<option value="'+esc(s.name)+'" '+(S.newPlant.strain===s.name?"selected":"")+'>'+esc(s.name)+' ('+s.days+'d)</option>';}).join("")+'</select></div>';
-  h+='<div><div class="lbl">Strain name (editable / custom)</div><input id="ap-strain-name" class="inp" placeholder="e.g. Royal Dwarf" value="'+esc(S.newPlant.strain)+'"/></div>';
+  h+='<div><div class="lbl">Plant Type</div><select id="ap-plantType" class="inp" onchange="var meta=plantTypeMeta(this.value);patch({newPlant:Object.assign({},S.newPlant,{plantType:this.value,totalDays:String(meta.defaultTotalDays),isStatic:meta.growthPattern===\'static\',harvestDate:addDays(S.newPlant.startDate,meta.defaultTotalDays)})});">'+
+    PLANT_TYPES.map(function(t){return '<option value="'+t.key+'" '+((S.newPlant.plantType||"cannabis")===t.key?"selected":"")+'>'+t.label+'</option>';}).join("")+
+    '</select></div>';
+  h+='<div style="font-size:11px;color:var(--text3);background:var(--bg3);border-radius:8px;padding:8px 10px">'+esc(plantTypeMeta(S.newPlant.plantType||"cannabis").desc)+'</div>';
+  h+=(S.newPlant.plantType==="cannabis"||!S.newPlant.plantType)?('<div><div class="lbl">Strain</div><select id="ap-strain" class="inp" onchange="onStrainPick()"><option value="">— Select RQS strain —</option>'+RQS_STRAINS.map(function(s){return '<option value="'+esc(s.name)+'" '+(S.newPlant.strain===s.name?"selected":"")+'>'+esc(s.name)+' ('+s.days+'d)</option>';}).join("")+'</select></div>'):'';
+  h+='<div><div class="lbl">'+(S.newPlant.plantType==="cannabis"||!S.newPlant.plantType?"Strain name (editable / custom)":"Variety (e.g. Purple Basil, Yellow Cherry Tomato)")+'</div><input id="ap-strain-name" class="inp" placeholder="e.g. Royal Dwarf" value="'+esc(S.newPlant.strain)+'"/></div>';
   h+='<div><div class="lbl">Start Date (seed in ground)</div><input id="ap-date" type="date" class="inp" value="'+S.newPlant.startDate+'" onchange="onDateOrDaysChange()"/></div>';
   h+='<div><div class="lbl">Expected Total Days (editable)</div><input id="ap-days" type="number" class="inp" placeholder="77" value="'+S.newPlant.totalDays+'" onchange="onDateOrDaysChange()"/></div>';
   h+='<div><div class="lbl">Expected Harvest Date (auto, editable)</div><input id="ap-harvest" type="date" class="inp" value="'+(S.newPlant.harvestDate||addDays(S.newPlant.startDate,Number(S.newPlant.totalDays)||77))+'"/></div>';
@@ -840,7 +1011,9 @@ function modalAddPlant(){
     '<option value="">— Unassigned —</option>'+
     getTentZones().map(function(z){return '<option value="'+z.key+'" '+(S.newPlant.position===z.key?"selected":"")+'>'+z.label+'</option>';}).join("")+
     '</select></div>';
-  h+='<label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text2)"><input id="ap-perpetual" type="checkbox" '+(S.newPlant.isPerpetual?"checked":"")+'/> Part of Perpetual Harvest rotation</label>';
+  h+='<label onclick="event.stopPropagation();var el=document.getElementById(\'ap-perpetual\');el.checked=!el.checked;patch({newPlant:Object.assign({},S.newPlant,{isPerpetual:el.checked})});" style="display:flex;align-items:center;gap:10px;font-size:13px;color:'+(S.newPlant.isPerpetual?"var(--green)":"var(--text2)")+';background:'+(S.newPlant.isPerpetual?"#4ade8015":"var(--bg3)")+';border:1.5px solid '+(S.newPlant.isPerpetual?"#4ade80":"var(--border2)")+';border-radius:10px;padding:10px 12px;cursor:pointer;user-select:none"><input id="ap-perpetual" type="checkbox" '+(S.newPlant.isPerpetual?"checked":"")+' style="width:20px;height:20px;flex-shrink:0;accent-color:var(--green);pointer-events:none"/> Part of Perpetual Harvest rotation</label>';
+  h+='<label onclick="event.stopPropagation();var el=document.getElementById(\'ap-cutting\');el.checked=!el.checked;patch({newPlant:Object.assign({},S.newPlant,{isCutting:el.checked})});" style="display:flex;align-items:center;gap:10px;font-size:13px;color:'+(S.newPlant.isCutting?"var(--green)":"var(--text2)")+';background:'+(S.newPlant.isCutting?"#4ade8015":"var(--bg3)")+';border:1.5px solid '+(S.newPlant.isCutting?"#4ade80":"var(--border2)")+';border-radius:10px;padding:10px 12px;cursor:pointer;user-select:none"><input id="ap-cutting" type="checkbox" '+(S.newPlant.isCutting?"checked":"")+' style="width:20px;height:20px;flex-shrink:0;accent-color:var(--green);pointer-events:none"/> This is a cutting/clone (not grown from seed)</label>';
+  h+='<label onclick="event.stopPropagation();var el=document.getElementById(\'ap-static\');el.checked=!el.checked;patch({newPlant:Object.assign({},S.newPlant,{isStatic:el.checked})});" style="display:flex;align-items:center;gap:10px;font-size:13px;color:'+(S.newPlant.isStatic?"var(--green)":"var(--text2)")+';background:'+(S.newPlant.isStatic?"#4ade8015":"var(--bg3)")+';border:1.5px solid '+(S.newPlant.isStatic?"#4ade80":"var(--border2)")+';border-radius:10px;padding:10px 12px;cursor:pointer;user-select:none"><input id="ap-static" type="checkbox" '+(S.newPlant.isStatic?"checked":"")+' style="width:20px;height:20px;flex-shrink:0;accent-color:var(--green);pointer-events:none"/> Static / forever-fruiting plant (no harvest cycle, lives in the tent)</label>';
   h+='<div><div class="lbl">Notes (optional)</div><textarea id="ap-notes" class="inp" rows="2" placeholder="Anything you want to remember..." style="resize:none">'+esc(S.newPlant.notes)+'</textarea></div>';
   h+='<button onclick="submitAddPlant()" class="btn btn-green" style="width:100%">Start Growing 🌱</button>';
   h+='<button onclick="patch({showAddPlant:false})" class="btn btn-outline" style="width:100%">Cancel</button>';
@@ -856,7 +1029,11 @@ function modalEditPlant(){
   h+='<div style="font-size:16px;font-weight:700;color:var(--text);margin-bottom:18px">✏️ Edit Plant</div>';
   h+='<div style="display:flex;flex-direction:column;gap:12px">';
   h+='<div><div class="lbl">Plant Name</div><input id="ep-name" class="inp" value="'+esc(p.name)+'"/></div>';
-  h+='<div><div class="lbl">Strain</div><input id="ep-strain" class="inp" value="'+esc(p.strain)+'"/></div>';
+  h+='<div><div class="lbl">Plant Type</div><select id="ep-plantType" class="inp">'+
+    PLANT_TYPES.map(function(t){return '<option value="'+t.key+'" '+((p.plantType||"cannabis")===t.key?"selected":"")+'>'+t.label+'</option>';}).join("")+
+    '</select></div>';
+  h+='<div style="font-size:11px;color:var(--text3);background:var(--bg3);border-radius:8px;padding:8px 10px">'+esc(plantTypeMeta(p.plantType||"cannabis").desc)+'</div>';
+  h+='<div><div class="lbl">Strain / Variety</div><input id="ep-strain" class="inp" value="'+esc(p.strain)+'"/></div>';
   h+='<div><div class="lbl">Start Date</div><input id="ep-date" type="date" class="inp" value="'+p.startDate+'" onchange="onEpDateOrDays()"/></div>';
   h+='<div><div class="lbl">Total Days</div><input id="ep-days" type="number" class="inp" value="'+(p.totalDays||plantTotalDays(p))+'" onchange="onEpDateOrDays()"/></div>';
   h+='<div><div class="lbl">Harvest Date (editable)</div><input id="ep-harvest" type="date" class="inp" value="'+(p.harvestDate||addDays(p.startDate,plantTotalDays(p)))+'"/></div>';
@@ -864,7 +1041,9 @@ function modalEditPlant(){
     '<option value="">— Unassigned —</option>'+
     getTentZones().map(function(z){return '<option value="'+z.key+'" '+((p.position||"")===z.key?"selected":"")+'>'+z.label+'</option>';}).join("")+
     '</select></div>';
-  h+='<label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text2)"><input id="ep-perpetual" type="checkbox" '+(p.isPerpetual?"checked":"")+'/> Part of Perpetual Harvest rotation</label>';
+  h+='<label onclick="event.stopPropagation();var el=document.getElementById(\'ep-perpetual\');el.checked=!el.checked;this.style.borderColor=el.checked?\'#4ade80\':\'var(--border2)\';this.style.background=el.checked?\'#4ade8015\':\'var(--bg3)\';this.style.color=el.checked?\'var(--green)\':\'var(--text2)\';" style="display:flex;align-items:center;gap:10px;font-size:13px;color:'+(p.isPerpetual?"var(--green)":"var(--text2)")+';background:'+(p.isPerpetual?"#4ade8015":"var(--bg3)")+';border:1.5px solid '+(p.isPerpetual?"#4ade80":"var(--border2)")+';border-radius:10px;padding:10px 12px;cursor:pointer;user-select:none"><input id="ep-perpetual" type="checkbox" '+(p.isPerpetual?"checked":"")+' style="width:20px;height:20px;flex-shrink:0;accent-color:var(--green);pointer-events:none"/> Part of Perpetual Harvest rotation</label>';
+  h+='<label onclick="event.stopPropagation();var el=document.getElementById(\'ep-cutting\');el.checked=!el.checked;this.style.borderColor=el.checked?\'#4ade80\':\'var(--border2)\';this.style.background=el.checked?\'#4ade8015\':\'var(--bg3)\';this.style.color=el.checked?\'var(--green)\':\'var(--text2)\';" style="display:flex;align-items:center;gap:10px;font-size:13px;color:'+(p.isCutting?"var(--green)":"var(--text2)")+';background:'+(p.isCutting?"#4ade8015":"var(--bg3)")+';border:1.5px solid '+(p.isCutting?"#4ade80":"var(--border2)")+';border-radius:10px;padding:10px 12px;cursor:pointer;user-select:none"><input id="ep-cutting" type="checkbox" '+(p.isCutting?"checked":"")+' style="width:20px;height:20px;flex-shrink:0;accent-color:var(--green);pointer-events:none"/> This is a cutting/clone (not grown from seed)</label>';
+  h+='<label onclick="event.stopPropagation();var el=document.getElementById(\'ep-static\');el.checked=!el.checked;this.style.borderColor=el.checked?\'#4ade80\':\'var(--border2)\';this.style.background=el.checked?\'#4ade8015\':\'var(--bg3)\';this.style.color=el.checked?\'var(--green)\':\'var(--text2)\';" style="display:flex;align-items:center;gap:10px;font-size:13px;color:'+(p.isStatic?"var(--green)":"var(--text2)")+';background:'+(p.isStatic?"#4ade8015":"var(--bg3)")+';border:1.5px solid '+(p.isStatic?"#4ade80":"var(--border2)")+';border-radius:10px;padding:10px 12px;cursor:pointer;user-select:none"><input id="ep-static" type="checkbox" '+(p.isStatic?"checked":"")+' style="width:20px;height:20px;flex-shrink:0;accent-color:var(--green);pointer-events:none"/> Static / forever-fruiting plant (no harvest cycle, lives in the tent)</label>';
   h+='<button onclick="submitEditPlant()" class="btn btn-green" style="width:100%">Save Changes</button>';
   h+='<button onclick="patch({showEditPlant:false})" class="btn btn-outline" style="width:100%">Cancel</button>';
   h+='</div></div></div>';
@@ -900,7 +1079,7 @@ function modalLog(){
   var p=D.plants.find(function(x){return x.id===S.activePlantId;});
   if(!p)return "";
   var days=daysSince(p.startDate);
-  var stage=getStage(days,Number(p.totalDays)||77);
+  var stage=getStageFor(p,days,Number(p.totalDays)||77);
   var h='<div class="mbg" onclick="if(event.target===this)patch({showLog:false})"><div class="modal">';
   h+='<div class="modal-handle"></div>';
   h+='<div style="font-size:16px;font-weight:700;color:var(--text);margin-bottom:4px">📋 Log Week</div>';
@@ -922,13 +1101,17 @@ function modalFeed(){
   var p=D.plants.find(function(x){return x.id===S.activePlantId;});
   if(!p)return "";
   var days=daysSince(p.startDate);
-  var tc=getTerraCannaWeek(days);
+  var tc=getFeedPlanFor(p,days);
+  var learned=getLearnedFeed(p,days);
   var f=S.newFeed;
   var h='<div class="mbg" onclick="if(event.target===this)patch({showFeed:false})"><div class="modal">';
   h+='<div class="modal-handle"></div>';
   h+='<div style="font-size:16px;font-weight:700;color:var(--text);margin-bottom:4px">🧪 Feed '+esc(p.name)+'</div>';
-  h+='<div style="font-size:12px;color:var(--text3);margin-bottom:14px">Day '+days+' — Terra Canna Week '+tc.week+' ('+esc(tc.note)+')</div>';
-  h+='<div style="background:var(--bg3);border-radius:10px;padding:10px;margin-bottom:14px;font-size:12px;color:var(--text2)">Suggested mix: Starter '+tc.starter+' · Grow '+tc.grow+' · Bloom '+tc.bloom+' · PK '+tc.pk+' · Booster '+tc.booster+' ml/L</div>';
+  h+='<div style="font-size:12px;color:var(--text3);margin-bottom:14px">'+plantTypeLabel(p.plantType)+' · Day '+days+' — Week '+tc.week+' ('+esc(tc.note)+')</div>';
+  h+='<div style="background:var(--bg3);border-radius:10px;padding:10px;margin-bottom:10px;font-size:12px;color:var(--text2)">Suggested mix: Starter '+tc.starter+' · Grow '+tc.grow+' · Bloom '+tc.bloom+' · PK '+tc.pk+' · Booster '+tc.booster+' ml/L</div>';
+  if(learned){
+    h+='<div style="background:#a78bfa15;border:1px solid #a78bfa30;border-radius:10px;padding:10px;margin-bottom:14px;font-size:12px;color:var(--text2)">🧠 Your history'+(learned.matchedStage?" (this stage)":" (overall)")+': '+learned.nutrients.map(function(n){return esc(n.name)+" "+n.avgMlPerL+"ml/L";}).join(" · ")+'</div>';
+  }
   h+='<div style="display:flex;flex-direction:column;gap:12px">';
   h+='<div><div class="lbl">Date</div><input id="fd-date" type="date" class="inp" value="'+f.date+'"/></div>';
   h+='<div class="lbl">Nutrients Used</div>';
@@ -1005,7 +1188,7 @@ function modalAdvisor(){
       h+='<div style="background:#a78bfa10;border:1.5px solid #a78bfa25;border-radius:12px;padding:12px;margin-bottom:16px">';
       D.plants.forEach(function(p){
         var days=daysSince(p.startDate);
-        var stage=getStage(days,Number(p.totalDays)||77);
+        var stage=getStageFor(p,days,Number(p.totalDays)||77);
         h+='<div style="font-size:12px;color:#a78bfa;margin-bottom:4px">'+stage.icon+' '+esc(p.name)+' — Day '+days+' — '+stage.name+'</div>';
       });
       h+='</div>';
@@ -1044,6 +1227,7 @@ function onDateOrDaysChange(){
 
 function submitAddPlant(){
   var name=(document.getElementById("ap-name")||{}).value||"";name=name.trim();
+  var plantType=(document.getElementById("ap-plantType")||{}).value||S.newPlant.plantType||"cannabis";
   var strain=(document.getElementById("ap-strain-name")||{}).value||"";
   var startDate=(document.getElementById("ap-date")||{}).value||tod();
   var totalDays=(document.getElementById("ap-days")||{}).value||"77";
@@ -1051,11 +1235,13 @@ function submitAddPlant(){
   var notes=(document.getElementById("ap-notes")||{}).value||"";
   var position=(document.getElementById("ap-position")||{}).value||"";
   var isPerpetual=(document.getElementById("ap-perpetual")&&document.getElementById("ap-perpetual").checked)||(D.setup.perpetualZones||[]).indexOf(position)>-1;
+  var isCutting=document.getElementById("ap-cutting")&&document.getElementById("ap-cutting").checked;
+  var isStatic=document.getElementById("ap-static")&&document.getElementById("ap-static").checked;
   if(!name){showToast("Enter a plant name","#f87171");return;}
-  var p={id:uid(),name:name,strain:strain,startDate:startDate,totalDays:totalDays,harvestDate:harvestDate,notes:notes,position:position,isPerpetual:isPerpetual,harvested:false};
+  var p={id:uid(),name:name,strain:strain,plantType:plantType,startDate:startDate,totalDays:totalDays,harvestDate:harvestDate,notes:notes,position:position,isPerpetual:isPerpetual,isCutting:isCutting,isStatic:isStatic,harvested:false};
   D.plants.push(p);
   if(!D.logs[p.id])D.logs[p.id]=[];
-  saveD(D);patch({showAddPlant:false,newPlant:{name:"",strain:"",startDate:tod(),totalDays:"77",harvestDate:addDays(tod(),77),notes:"",position:"",isPerpetual:false}});
+  saveD(D);patch({showAddPlant:false,newPlant:{name:"",strain:"",plantType:"cannabis",startDate:tod(),totalDays:"77",harvestDate:addDays(tod(),77),notes:"",position:"",isPerpetual:false,isCutting:false}});
   showToast("🌱 "+name+" added! Happy growing!");
 }
 
@@ -1098,6 +1284,12 @@ function togglePerpetual(pid){
     D.setup.perpetualZones=(D.setup.perpetualZones||[]).concat([p.position]);
   }
   saveD(D);render();showToast(p.isPerpetual?"♻️ "+p.name+" set as Perpetual":p.name+" set as Normal");
+}
+
+function markFruitingStarted(pid){
+  var p=D.plants.find(function(x){return x.id===pid;});if(!p)return;
+  p.fruitingStartDate=tod();
+  saveD(D);render();showToast("🍅 "+p.name+" is now producing!");
 }
 
 function togglePerpetualZone(key){
@@ -1191,11 +1383,14 @@ function submitEditPlant(){
   var pid=S.editingPlantId;var p=D.plants.find(function(x){return x.id===pid;});if(!p)return;
   p.name=(document.getElementById("ep-name")||{}).value||p.name;
   p.strain=(document.getElementById("ep-strain")||{}).value||p.strain;
+  p.plantType=(document.getElementById("ep-plantType")||{}).value||p.plantType||"cannabis";
   p.startDate=(document.getElementById("ep-date")||{}).value||p.startDate;
   p.totalDays=(document.getElementById("ep-days")||{}).value||p.totalDays;
   p.harvestDate=(document.getElementById("ep-harvest")||{}).value||p.harvestDate;
   p.position=(document.getElementById("ep-position")||{}).value||"";
   p.isPerpetual=(document.getElementById("ep-perpetual")&&document.getElementById("ep-perpetual").checked)||(D.setup.perpetualZones||[]).indexOf(p.position)>-1;
+  p.isCutting=document.getElementById("ep-cutting")&&document.getElementById("ep-cutting").checked;
+  p.isStatic=document.getElementById("ep-static")&&document.getElementById("ep-static").checked;
   saveD(D);patch({showEditPlant:false,editingPlantId:null});showToast("Plant updated!");
 }
 
@@ -1224,7 +1419,7 @@ async function runAdvisor(){
     summary+="PLANTS:"+nl;
     D.plants.forEach(function(p){
       var days=daysSince(p.startDate);
-      var stage=getStage(days,Number(p.totalDays)||77);
+      var stage=getStageFor(p,days,Number(p.totalDays)||77);
       var logs=D.logs[p.id]||[];
       summary+=p.name+" ("+p.strain+") — Day "+days+" — "+stage.name+nl;
       if(logs.length>0){
