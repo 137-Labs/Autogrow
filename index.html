@@ -184,6 +184,111 @@ function getWeeklyTips(days,setup){
 }
 
 // ── Terra Canna feed chart ───────────────────────────────
+// ── Real nutrient product database ───────────────────────
+// Each brand has bottles with their own per-phase ml/L curve (low/mid/high = early/mid/late within that phase).
+// Phases: rooting, veg, transition, flower, lateFlower, flush
+var NUTRIENT_BRANDS={
+  canna_terra:{
+    label:"CANNA Terra",
+    starterPackBottles:["terra_vega","terra_flores"],
+    bottles:{
+      terra_vega:{name:"Terra Vega",role:"base-veg",unit:"ml/L",
+        dose:{rooting:0,veg:[1.5,3,5.5],transition:5.5,flower:0,lateFlower:0,flush:0}},
+      terra_flores:{name:"Terra Flores",role:"base-flower",unit:"ml/L",
+        dose:{rooting:0,veg:0,transition:0,flower:[5,6,7],lateFlower:7,flush:0}},
+      rhizotonic:{name:"Rhizotonic",role:"addon-root",unit:"ml/L",
+        dose:{rooting:0.5,veg:2,transition:0.5,flower:0.5,lateFlower:0,flush:0}},
+      cannazym:{name:"Cannazym",role:"addon-enzyme",unit:"ml/L",
+        dose:{rooting:0,veg:2.5,transition:2.5,flower:2.5,lateFlower:2.5,flush:0}},
+      boost:{name:"Boost Accelerator",role:"addon-bloom",unit:"ml/L",
+        dose:{rooting:0,veg:0,transition:2,flower:2,lateFlower:4,flush:0}},
+      pk1314:{name:"PK 13/14",role:"addon-pk",unit:"ml/L",
+        dose:{rooting:0,veg:0,transition:0,flower:0,lateFlower:2,flush:0}},
+      calmag:{name:"CalMag",role:"addon-calmag",unit:"ml/L",
+        dose:{rooting:0.5,veg:1,transition:1,flower:1,lateFlower:1,flush:0}}
+    }
+  },
+  biobizz:{
+    label:"BioBizz",
+    starterPackBottles:["bio_grow","bio_bloom","top_max"],
+    bottles:{
+      bio_grow:{name:"Bio·Grow",role:"base-veg",unit:"ml/L",
+        dose:{rooting:0,veg:[1,2,4],transition:2,flower:1,lateFlower:0,flush:0}},
+      bio_bloom:{name:"Bio·Bloom",role:"base-flower",unit:"ml/L",
+        dose:{rooting:0,veg:0,transition:1,flower:[2,3,4],lateFlower:4,flush:0}},
+      top_max:{name:"Top Max",role:"addon-bloom",unit:"ml/L",
+        dose:{rooting:0,veg:0,transition:1,flower:2,lateFlower:4,flush:0}},
+      root_juice:{name:"Root·Juice",role:"addon-root",unit:"ml/L",
+        dose:{rooting:2,veg:2,transition:1,flower:0,lateFlower:0,flush:0}},
+      fish_mix:{name:"Fish·Mix",role:"addon-veg-alt",unit:"ml/L",
+        dose:{rooting:0,veg:[1,2,4],transition:2,flower:1,lateFlower:0,flush:0}},
+      bio_heaven:{name:"Bio·Heaven",role:"addon-booster",unit:"ml/L",
+        dose:{rooting:0,veg:1,transition:1,flower:1,lateFlower:1,flush:0}},
+      calmag:{name:"CalMag",role:"addon-calmag",unit:"ml/L",
+        dose:{rooting:0.5,veg:1,transition:1,flower:1,lateFlower:1,flush:0}}
+    }
+  },
+  custom:{
+    label:"Custom (your own bottles)",
+    starterPackBottles:[],
+    bottles:{} // populated from D.setup.customBottles
+  }
+};
+
+// ── Map a plant's day count + type to a generic growth phase ──
+// This is brand-agnostic; brands just plug their ml/L curve into whichever phase applies.
+function getNutrientPhase(plant,days,stage){
+  var type=plant.plantType||"cannabis";
+  if(plant.isCutting&&days<=10)return"rooting";
+  if(type==="basil"){
+    if(stage.key==="established")return"veg"; // basil never really "flowers" for nutrient purposes
+    return days<=21?"rooting":"veg";
+  }
+  if(type==="tomato"){
+    if(stage.key==="flowerset")return"transition";
+    if(stage.key==="producing")return"lateFlower"; // ongoing fruiting = sustained P/K
+    return days<=42?"veg":"transition";
+  }
+  // cannabis / other / static
+  if(stage.key==="flush")return"flush";
+  if(stage.key==="harvest")return"flush";
+  if(stage.key==="flower")return(stage.tip&&days>0)?"flower":"flower";
+  if(stage.key==="preflower")return"transition";
+  if(stage.key==="veg")return"veg";
+  return"rooting";
+}
+
+// Resolve a dose value (number or [low,mid,high] array) to a single ml/L for this point in the phase
+function resolveDose(doseVal,phaseProgress){
+  if(typeof doseVal==="number")return doseVal;
+  if(Array.isArray(doseVal)){
+    if(phaseProgress<=0.33)return doseVal[0];
+    if(phaseProgress<=0.66)return doseVal[1]!==undefined?doseVal[1]:doseVal[0];
+    return doseVal[doseVal.length-1];
+  }
+  return 0;
+}
+
+// ── Build the actual feed plan for a plant using whichever bottles the user has selected ──
+function getRealFeedPlan(plant,days,stage){
+  var cfg=D.setup.nutrients||{};
+  var brandKey=cfg.brand||"canna_terra";
+  var brand=NUTRIENT_BRANDS[brandKey];
+  if(!brand)return null;
+  var selectedBottles=cfg.bottles&&cfg.bottles.length?cfg.bottles:(brand.starterPackBottles||[]);
+  var phase=getNutrientPhase(plant,days,stage);
+  // crude phase progress estimate (0-1) based on days within stage — good enough for ramping doses
+  var phaseProgress=Math.min(1,((days%14)/14));
+  var bottleDoses=selectedBottles.map(function(bk){
+    var bottle=(brandKey==="custom"?(cfg.customBottles||{})[bk]:brand.bottles[bk]);
+    if(!bottle)return null;
+    var doseVal=bottle.dose?bottle.dose[phase]:0;
+    var ml=resolveDose(doseVal,phaseProgress);
+    return{key:bk,name:bottle.name,mlPerL:Math.round(ml*10)/10};
+  }).filter(Boolean).filter(function(b){return b.mlPerL>0;});
+  return{brandLabel:brand.label,phase:phase,bottles:bottleDoses};
+}
+
 var TERRA_CANNA=[
   {week:1,stage:"Seedling",starter:0,grow:0,bloom:0,pk:0,booster:0,note:"Water only"},
   {week:2,stage:"Seedling",starter:1,grow:0,bloom:0,pk:0,booster:0,note:"25% dose"},
@@ -246,13 +351,31 @@ var PLANT_TYPES=[
 function plantTypeMeta(key){return PLANT_TYPES.find(function(x){return x.key===key;})||PLANT_TYPES[0];}
 function plantTypeLabel(key){return plantTypeMeta(key).label;}
 function getFeedPlanFor(plant,days){
+  var totalDays=plantTotalDays(plant);
+  var stage=getStageFor(plant,days,totalDays);
+  var real=getRealFeedPlan(plant,days,stage);
+  if(real&&real.bottles.length){
+    // adapt to old chart shape for backward-compat UI rendering
+    return{
+      week:Math.floor(days/7)+1,
+      stage:stage.name,
+      isRealProduct:true,
+      brandLabel:real.brandLabel,
+      bottles:real.bottles,
+      note:real.bottles.map(function(b){return b.name+" "+b.mlPerL+"ml/L";}).join(", ")||"Water only this week"
+    };
+  }
+  if(real){
+    return{week:Math.floor(days/7)+1,stage:stage.name,isRealProduct:true,brandLabel:real.brandLabel,bottles:[],note:"Water only this week"};
+  }
+  // fallback to legacy abstract charts if no nutrient config set
   var type=plant.plantType||"cannabis";
   if(type==="tomato")return getTomatoWeek(days);
   if(type==="basil")return getBasilWeek(days);
   if(type==="cannabis"&&plant.isCutting&&days<=10){
     return{week:0,stage:"Rooting",starter:0,grow:0,bloom:0,pk:0,booster:0,note:"Water only — no roots to take up nutrients yet"};
   }
-  return getTerraCannaWeek(days); // cannabis + other default to cannabis chart
+  return getTerraCannaWeek(days);
 }
 
 // ── Learning layer: average past feed doses logged at this stage ──
@@ -482,7 +605,8 @@ var D=loadD()||{
     lightSchedule:"18/6",medium:"soil",potSize:"11",phing:false,
     avgFlowerDays:"77",harvestGap:"35",numSlots:"1",
     lightHeight:"135",netHeight:"55",canopyMax:"90",
-    zoneLayout:"5z_ushape",perpetualZones:[]
+    zoneLayout:"5z_ushape",perpetualZones:[],
+    nutrients:{brand:"canna_terra",bottles:[],customBottles:{}}
   },
   logs:{},
   showAdvisor:false,advisorLoading:false,advisorText:""
@@ -494,6 +618,8 @@ if(!D.setup.canopyMax)D.setup.canopyMax="90";
 if(!D.setup.zoneLayout)D.setup.zoneLayout="5z_ushape";
 if(!D.setup.numZones)D.setup.numZones=String(TENT_ZONES_PRESETS["5z_ushape"].length);
 if(!D.setup.perpetualZones)D.setup.perpetualZones=[];
+if(!D.setup.nutrients)D.setup.nutrients={brand:"canna_terra",bottles:[],customBottles:{}};
+if(!D.setup.nutrients.customBottles)D.setup.nutrients.customBottles={};
 
 var S={
   tab:"plants",
@@ -691,7 +817,7 @@ function tabMap(){
     if(p){
       var d=daysSince(p.startDate);
       var t=getFeedPlanFor(p,d);
-      var mix=[["S",t.starter],["G",t.grow],["B",t.bloom],["PK",t.pk],["Bo",t.booster]].filter(function(m){return m[1]>0;}).map(function(m){return m[0]+m[1];}).join(" ");
+      var mix=t.isRealProduct?(t.bottles.length?t.bottles.map(function(b){return b.name.slice(0,3)+b.mlPerL;}).join(" "):""):[["S",t.starter],["G",t.grow],["B",t.bloom],["PK",t.pk],["Bo",t.booster]].filter(function(m){return m[1]>0;}).map(function(m){return m[0]+m[1];}).join(" ");
       feedTag='<div style="font-size:9px;color:var(--green);font-family:\'DM Mono\',monospace;margin-top:2px">'+(mix||"water only")+'</div>';
     }
     if(!p&&locked&&rotMap[key]){
@@ -746,11 +872,15 @@ function tabMap(){
     }
     h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">';
     h+=infoCell("💧","Water",water);
-    h+=infoCell("🧪","Suggested","Wk"+tc.week+" "+tc.note);
+    h+=infoCell("🧪","Suggested","Wk"+tc.week+" "+(tc.isRealProduct?(tc.bottles.length?tc.bottles.length+" bottle"+(tc.bottles.length>1?"s":""):"Water only"):tc.note));
     h+='</div>';
     h+='<div style="background:var(--bg3);border-radius:10px;padding:10px;margin-bottom:8px">';
-    h+='<div style="font-size:10px;color:var(--text3);font-family:\'DM Mono\',monospace;margin-bottom:4px">SUGGESTED MIX (per L, this week)</div>';
-    h+='<div style="font-size:12px;color:var(--text2)">Starter '+tc.starter+' · Grow '+tc.grow+' · Bloom '+tc.bloom+' · PK '+tc.pk+' · Booster '+tc.booster+'</div>';
+    h+='<div style="font-size:10px;color:var(--text3);font-family:\'DM Mono\',monospace;margin-bottom:4px">'+(tc.isRealProduct?esc(tc.brandLabel).toUpperCase()+" — THIS WEEK":"SUGGESTED MIX (per L, this week)")+'</div>';
+    if(tc.isRealProduct){
+      h+='<div style="font-size:12px;color:var(--text2)">'+(tc.bottles.length?tc.bottles.map(function(b){return esc(b.name)+" "+b.mlPerL+"ml/L";}).join(" · "):"Water only — no feeding this week")+'</div>';
+    }else{
+      h+='<div style="font-size:12px;color:var(--text2)">Starter '+tc.starter+' · Grow '+tc.grow+' · Bloom '+tc.bloom+' · PK '+tc.pk+' · Booster '+tc.booster+'</div>';
+    }
     h+='</div>';
     if(learned){
       h+='<div style="background:#a78bfa15;border:1px solid #a78bfa30;border-radius:10px;padding:10px;margin-bottom:12px">';
@@ -804,7 +934,12 @@ function tabToday(){
       {icon:"💡",title:"Light Distance",detail:dist.min+"–"+dist.max+"cm — "+dist.note},
       {icon:"🌡️",title:"Environment",detail:"Temp: 22-26°C | Humidity: "+(stage.key==="flower"?"40-50%":"55-70%")},
     ];
-    if(nutriRow&&(nutriRow.grow>0||nutriRow.bloom>0||nutriRow.starter>0)){
+    var tc=getFeedPlanFor(p,days);
+    if(tc.isRealProduct){
+      if(tc.bottles.length){
+        tasks.push({icon:"🧪",title:"Nutrients ("+tc.brandLabel+")",detail:tc.bottles.map(function(b){return b.name+" "+b.mlPerL+"ml/L";}).join(" + ")});
+      }
+    }else if(nutriRow&&(nutriRow.grow>0||nutriRow.bloom>0||nutriRow.starter>0)){
       var nutriStr="";
       if(nutriRow.starter>0)nutriStr+="Starter "+nutriRow.starter+"ml/L ";
       if(nutriRow.grow>0)nutriStr+="Grow "+nutriRow.grow+"ml/L ";
@@ -837,39 +972,71 @@ function tabToday(){
 
 // ── NUTRIENTS TAB ────────────────────────────────────────
 function tabNutrients(){
+  var cfg=D.setup.nutrients||{brand:"canna_terra",bottles:[]};
+  var brandKey=cfg.brand||"canna_terra";
+  var brand=NUTRIENT_BRANDS[brandKey];
+  var selected=cfg.bottles&&cfg.bottles.length?cfg.bottles:(brand.starterPackBottles||[]);
+
   var h='<div style="margin-bottom:14px">';
-  h+='<div style="font-size:15px;font-weight:700;color:var(--text);margin-bottom:4px">Terra Canna Feed Chart</div>';
-  h+='<div style="font-size:12px;color:var(--text3)">ml per litre of water. Adjust down 25% for first feeds.</div></div>';
-  // Current week highlight
-  if(D.plants.length>0){
-    var p=D.plants[0];
-    var week=Math.floor(daysSince(p.startDate)/7)+1;
-    h+='<div style="background:var(--green)15;border:1.5px solid var(--green)30;border-radius:12px;padding:10px 14px;margin-bottom:14px;font-size:12px;color:var(--green)">📍 '+esc(p.name)+' is on Week '+week+' — highlighted below</div>';
-  }
-  var currentWeek=D.plants.length>0?Math.floor(daysSince(D.plants[0].startDate)/7)+1:0;
-  h+='<div style="display:flex;flex-direction:column;gap:6px">';
-  TERRA_CANNA.forEach(function(row){
-    var isNow=row.week===currentWeek;
-    h+='<div style="background:'+(isNow?'var(--green)15':'var(--bg2)')+';border:1.5px solid '+(isNow?'var(--green)40':'var(--border)')+';border-radius:12px;padding:11px 14px">';
-    h+='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">';
-    h+='<div style="font-size:13px;font-weight:700;color:'+(isNow?'var(--green)':'var(--text)')+'">Week '+row.week+' — '+row.stage+'</div>';
-    if(isNow)h+='<div style="font-size:10px;background:var(--green);color:#071007;border-radius:100px;padding:2px 8px;font-weight:700">NOW</div>';
-    h+='</div>';
-    if(row.starter>0||row.grow>0||row.bloom>0||row.pk>0||row.booster>0){
-      h+='<div style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:6px">';
-      if(row.starter>0)h+=nutriBadge("Starter",row.starter,"#facc15");
-      if(row.grow>0)h+=nutriBadge("Grow",row.grow,"#4ade80");
-      if(row.bloom>0)h+=nutriBadge("Bloom",row.bloom,"#a78bfa");
-      if(row.pk>0)h+=nutriBadge("PK Boost",row.pk,"#f87171");
-      if(row.booster>0)h+=nutriBadge("Booster",row.booster,"#fb923c");
-      h+='</div>';
-    }else{
-      h+='<div style="font-size:12px;color:var(--text3)">💧 Plain water only</div>';
-    }
-    h+='<div style="font-size:11px;color:var(--text3);font-family:\'DM Mono\',monospace">'+row.note+'</div>';
-    h+='</div>';
+  h+='<div style="font-size:15px;font-weight:700;color:var(--text);margin-bottom:4px">Nutrient Setup</div>';
+  h+='<div style="font-size:12px;color:var(--text3)">Pick your line and which bottles you actually have — doses below update to match.</div></div>';
+
+  // Brand selector
+  h+='<div style="display:flex;gap:8px;margin-bottom:12px">';
+  Object.keys(NUTRIENT_BRANDS).forEach(function(bk){
+    var active=brandKey===bk;
+    h+='<button onclick="setNutrientBrand(\''+bk+'\')" style="flex:1;background:'+(active?"var(--green)15":"var(--bg2)")+';border:1.5px solid '+(active?"var(--green)":"var(--border)")+';border-radius:10px;padding:10px 6px;color:'+(active?"var(--green)":"var(--text2)")+';font-size:12px;font-weight:600;cursor:pointer">'+esc(NUTRIENT_BRANDS[bk].label)+'</button>';
   });
   h+='</div>';
+
+  if(brandKey==="custom"){
+    h+='<div style="background:var(--bg2);border:1.5px solid var(--border);border-radius:12px;padding:12px;margin-bottom:14px">';
+    h+='<div style="font-size:12px;color:var(--text3);margin-bottom:10px">Add your own bottles. Doses are flat (your input) applied every feed — adjust manually as your plant grows.</div>';
+    var customBottles=cfg.customBottles||{};
+    Object.keys(customBottles).forEach(function(bk){
+      h+='<div style="display:flex;justify-content:space-between;align-items:center;background:var(--bg3);border-radius:8px;padding:8px 10px;margin-bottom:6px">';
+      h+='<span style="font-size:13px;color:var(--text)">'+esc(customBottles[bk].name)+' — '+customBottles[bk].dose.veg+'ml/L</span>';
+      h+='<button onclick="removeCustomBottle(\''+bk+'\')" style="background:none;border:none;color:var(--text3);font-size:16px;cursor:pointer">×</button>';
+      h+='</div>';
+    });
+    h+='<div style="display:flex;gap:6px;margin-top:8px">';
+    h+='<input id="custom-bottle-name" class="inp" placeholder="Bottle name" style="flex:2"/>';
+    h+='<input id="custom-bottle-ml" type="number" step="0.1" class="inp" placeholder="ml/L" style="flex:1"/>';
+    h+='</div>';
+    h+='<button onclick="addCustomBottle()" style="width:100%;margin-top:8px;background:none;border:1px dashed var(--border2);border-radius:8px;padding:8px;font-size:12px;color:var(--text3);cursor:pointer">+ Add bottle</button>';
+    h+='</div>';
+  }else{
+    // Starter pack toggle + individual bottle checkboxes
+    var isStarterPack=JSON.stringify((selected||[]).slice().sort())===JSON.stringify((brand.starterPackBottles||[]).slice().sort());
+    h+='<div style="background:var(--bg2);border:1.5px solid var(--border);border-radius:12px;padding:12px;margin-bottom:14px">';
+    h+='<button onclick="useStarterPack(\''+brandKey+'\')" style="width:100%;text-align:left;background:'+(isStarterPack?"#4ade8015":"var(--bg3)")+';border:1.5px solid '+(isStarterPack?"#4ade80":"var(--border2)")+';border-radius:10px;padding:10px 12px;margin-bottom:10px;cursor:pointer;color:'+(isStarterPack?"var(--green)":"var(--text2)")+';font-size:13px;font-weight:600">📦 Use Starter Pack — '+(brand.starterPackBottles||[]).map(function(bk){return brand.bottles[bk].name;}).join(" + ")+'</button>';
+    h+='<div style="font-size:11px;color:var(--text3);margin-bottom:8px">Or pick individual bottles you own:</div>';
+    Object.keys(brand.bottles).forEach(function(bk){
+      var bottle=brand.bottles[bk];
+      var checked=selected.indexOf(bk)>-1;
+      var isAddon=bottle.role.indexOf("addon")===0;
+      h+='<label onclick="event.stopPropagation();toggleNutrientBottle(\''+bk+'\')" style="display:flex;align-items:center;gap:10px;font-size:13px;color:'+(checked?"var(--green)":"var(--text2)")+';background:'+(checked?"#4ade8015":"var(--bg3)")+';border:1.5px solid '+(checked?"#4ade80":"var(--border2)")+';border-radius:10px;padding:9px 12px;margin-bottom:6px;cursor:pointer;user-select:none"><input type="checkbox" '+(checked?"checked":"")+' style="width:18px;height:18px;flex-shrink:0;accent-color:var(--green);pointer-events:none"/> '+esc(bottle.name)+(isAddon?' <span style="color:var(--text3);font-size:11px;margin-left:4px">(add-on)</span>':'')+'</label>';
+    });
+    h+='</div>';
+  }
+
+  // Per-plant weekly preview using real selected bottles
+  if(D.plants.length>0){
+    h+='<div style="font-size:13px;font-weight:700;color:var(--text);margin:16px 0 8px">This Week — Per Plant</div>';
+    D.plants.filter(function(p){return !p.harvested;}).forEach(function(p){
+      var days=daysSince(p.startDate);
+      var tc=getFeedPlanFor(p,days);
+      h+='<div style="background:var(--bg2);border:1.5px solid var(--border);border-radius:12px;padding:11px 14px;margin-bottom:8px">';
+      h+='<div style="font-size:13px;font-weight:700;color:var(--text);margin-bottom:4px">'+esc(p.name)+' <span style="font-size:11px;color:var(--text3);font-weight:400">('+plantTypeLabel(p.plantType)+')</span></div>';
+      if(tc.isRealProduct){
+        h+='<div style="font-size:12px;color:var(--text2)">'+(tc.bottles.length?tc.bottles.map(function(b){return esc(b.name)+" "+b.mlPerL+"ml/L";}).join(" · "):"💧 Water only this week")+'</div>';
+      }else{
+        h+='<div style="font-size:12px;color:var(--text2)">'+esc(tc.note)+'</div>';
+      }
+      h+='</div>';
+    });
+  }
+
   h+='<div style="margin-top:16px;background:var(--bg2);border:1.5px solid var(--border);border-radius:12px;padding:14px">';
   h+='<div style="font-size:12px;font-weight:600;color:var(--yellow);margin-bottom:8px">💡 Beginner Tips</div>';
   var btips=["Always start at 25-50% of recommended dose","Add nutrients to water, not water to nutrients","If leaves yellow = more nutrients. Brown tips = less","pH 6.0-6.5 for soil — a pH pen costs €10-20 and makes a big difference","Less is more — overfeeding kills more plants than underfeeding"];
@@ -1107,8 +1274,15 @@ function modalFeed(){
   var h='<div class="mbg" onclick="if(event.target===this)patch({showFeed:false})"><div class="modal">';
   h+='<div class="modal-handle"></div>';
   h+='<div style="font-size:16px;font-weight:700;color:var(--text);margin-bottom:4px">🧪 Feed '+esc(p.name)+'</div>';
-  h+='<div style="font-size:12px;color:var(--text3);margin-bottom:14px">'+plantTypeLabel(p.plantType)+' · Day '+days+' — Week '+tc.week+' ('+esc(tc.note)+')</div>';
-  h+='<div style="background:var(--bg3);border-radius:10px;padding:10px;margin-bottom:10px;font-size:12px;color:var(--text2)">Suggested mix: Starter '+tc.starter+' · Grow '+tc.grow+' · Bloom '+tc.bloom+' · PK '+tc.pk+' · Booster '+tc.booster+' ml/L</div>';
+  h+='<div style="font-size:12px;color:var(--text3);margin-bottom:14px">'+plantTypeLabel(p.plantType)+' · Day '+days+' — Week '+tc.week+'</div>';
+  if(tc.isRealProduct){
+    h+='<div style="background:var(--bg3);border-radius:10px;padding:10px;margin-bottom:6px;font-size:12px;color:var(--text2)">'+esc(tc.brandLabel)+' suggested: '+(tc.bottles.length?tc.bottles.map(function(b){return esc(b.name)+" "+b.mlPerL+"ml/L";}).join(" · "):"Water only this week")+'</div>';
+    if(tc.bottles.length){
+      h+='<button onclick="prefillFeedFromSuggestion()" style="background:none;border:1px dashed var(--border2);border-radius:8px;padding:6px 10px;font-size:11px;color:var(--text3);cursor:pointer;margin-bottom:10px">↓ Use suggested mix below</button>';
+    }
+  }else{
+    h+='<div style="background:var(--bg3);border-radius:10px;padding:10px;margin-bottom:10px;font-size:12px;color:var(--text2)">Suggested mix: Starter '+tc.starter+' · Grow '+tc.grow+' · Bloom '+tc.bloom+' · PK '+tc.pk+' · Booster '+tc.booster+' ml/L</div>';
+  }
   if(learned){
     h+='<div style="background:#a78bfa15;border:1px solid #a78bfa30;border-radius:10px;padding:10px;margin-bottom:14px;font-size:12px;color:var(--text2)">🧠 Your history'+(learned.matchedStage?" (this stage)":" (overall)")+': '+learned.nutrients.map(function(n){return esc(n.name)+" "+n.avgMlPerL+"ml/L";}).join(" · ")+'</div>';
   }
@@ -1310,6 +1484,46 @@ function togglePerpetualZone(key){
   saveD(D);render();
 }
 
+function setNutrientBrand(brandKey){
+  D.setup.nutrients=D.setup.nutrients||{};
+  D.setup.nutrients.brand=brandKey;
+  D.setup.nutrients.bottles=(NUTRIENT_BRANDS[brandKey].starterPackBottles||[]).slice();
+  saveD(D);render();
+}
+function useStarterPack(brandKey){
+  D.setup.nutrients=D.setup.nutrients||{};
+  D.setup.nutrients.bottles=(NUTRIENT_BRANDS[brandKey].starterPackBottles||[]).slice();
+  saveD(D);render();showToast("📦 Starter pack selected");
+}
+function toggleNutrientBottle(bottleKey){
+  D.setup.nutrients=D.setup.nutrients||{bottles:[]};
+  var bottles=D.setup.nutrients.bottles||[];
+  var idx=bottles.indexOf(bottleKey);
+  if(idx>-1)bottles.splice(idx,1);
+  else bottles.push(bottleKey);
+  D.setup.nutrients.bottles=bottles;
+  saveD(D);render();
+}
+function addCustomBottle(){
+  var name=(document.getElementById("custom-bottle-name")||{}).value||"";
+  var ml=(document.getElementById("custom-bottle-ml")||{}).value||"";
+  if(!name||!ml){showToast("Enter a name and ml/L","#f87171");return;}
+  var key="custom_"+name.toLowerCase().replace(/[^a-z0-9]/g,"_")+"_"+Date.now();
+  D.setup.nutrients=D.setup.nutrients||{bottles:[],customBottles:{}};
+  D.setup.nutrients.customBottles=D.setup.nutrients.customBottles||{};
+  D.setup.nutrients.customBottles[key]={name:name,role:"custom",unit:"ml/L",dose:{rooting:0,veg:Number(ml),transition:Number(ml),flower:Number(ml),lateFlower:Number(ml),flush:0}};
+  D.setup.nutrients.bottles=(D.setup.nutrients.bottles||[]).concat([key]);
+  saveD(D);render();showToast("Added "+name);
+}
+function removeCustomBottle(key){
+  if(D.setup.nutrients&&D.setup.nutrients.customBottles)delete D.setup.nutrients.customBottles[key];
+  if(D.setup.nutrients&&D.setup.nutrients.bottles){
+    var idx=D.setup.nutrients.bottles.indexOf(key);
+    if(idx>-1)D.setup.nutrients.bottles.splice(idx,1);
+  }
+  saveD(D);render();
+}
+
 function submitTentConfig(){
   D.setup.tentSize=(document.getElementById("tc-size")||{}).value||D.setup.tentSize;
   D.setup.lightModel=(document.getElementById("tc-light")||{}).value||D.setup.lightModel;
@@ -1336,6 +1550,16 @@ function readFeedRowsFromDOM(){
   });
   return out.length?out:[{name:"",mlPerL:""}];
 }
+function prefillFeedFromSuggestion(){
+  var pid=S.activePlantId;if(!pid)return;
+  var p=D.plants.find(function(x){return x.id===pid;});if(!p)return;
+  var days=daysSince(p.startDate);
+  var tc=getFeedPlanFor(p,days);
+  if(!tc.isRealProduct||!tc.bottles.length)return;
+  var rows=tc.bottles.map(function(b){return{name:b.name,mlPerL:String(b.mlPerL)};});
+  patch({newFeed:Object.assign({},S.newFeed,{nutrients:rows})});
+}
+
 function addFeedRow(){
   var rows=readFeedRowsFromDOM();
   rows.push({name:"",mlPerL:""});
