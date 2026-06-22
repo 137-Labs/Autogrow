@@ -92,6 +92,8 @@ function esc(s){return String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").
 function showToast(m,c){var t=document.getElementById("toast");t.textContent=m;t.style.background=c||"var(--green)";t.style.color=c?"#fff":"#071007";t.style.display="block";setTimeout(function(){t.style.display="none";},2500);}
 function daysSince(dateStr){if(!dateStr)return 0;var d=new Date(dateStr),n=new Date();return Math.floor((n-d)/(1000*60*60*24));}
 function addDays(dateStr,n){var d=new Date(dateStr);d.setDate(d.getDate()+n);return d.toISOString().slice(0,10);}
+function daysBetween(a,b){return Math.round((new Date(b)-new Date(a))/86400000);}
+function plantTotalDays(p){if(p.harvestDate)return daysBetween(p.startDate,p.harvestDate);return Number(p.totalDays)||77;}
 
 // ── Stage calculator ─────────────────────────────────────
 function getStage(days,totalDays){
@@ -134,6 +136,70 @@ var TERRA_CANNA=[
   {week:11,stage:"Harvest",starter:0,grow:0,bloom:0,pk:0,booster:0,note:"Harvest window"},
 ];
 
+// ── RQS Autoflower strain database ───────────────────────
+var RQS_STRAINS=[
+  {name:"Quick One",days:60},
+  {name:"Easy Bud",days:60},
+  {name:"Royal CBDV Automatic",days:63},
+  {name:"Bubble Kush Automatic",days:63},
+  {name:"HulkBerry Automatic",days:63},
+  {name:"Purple Queen Automatic",days:63},
+  {name:"Sherbet Queen Automatic",days:63},
+  {name:"Watermelon Automatic",days:63},
+  {name:"Royal Bluematic",days:67},
+  {name:"Royal Kush Automatic",days:67},
+  {name:"Diesel Automatic",days:67},
+  {name:"Candy Kush Express",days:70},
+  {name:"Northern Light Automatic",days:70},
+  {name:"Titan F1",days:73},
+  {name:"Royal Jack Automatic",days:73},
+  {name:"Royal Gorilla Automatic",days:77},
+  {name:"Sour Diesel Automatic",days:77},
+  {name:"Royal Creamatic",days:84},
+  {name:"Royal Haze Automatic",days:87},
+  {name:"Custom / Other",days:77}
+];
+function strainDays(name){var s=RQS_STRAINS.find(function(x){return x.name===name;});return s?s.days:77;}
+
+// ── Tent zones (configurable layouts) ────────────────────
+var TENT_ZONES_PRESETS={
+  "5z_ushape":[
+    {key:"backLeft",label:"Back Left"},
+    {key:"backCenter",label:"Back Center"},
+    {key:"backRight",label:"Back Right"},
+    {key:"frontLeft",label:"Front Left"},
+    {key:"frontRight",label:"Front Right"}
+  ],
+  "4z_grid":[
+    {key:"backLeft",label:"Back Left"},
+    {key:"backRight",label:"Back Right"},
+    {key:"frontLeft",label:"Front Left"},
+    {key:"frontRight",label:"Front Right"}
+  ],
+  "7z_ushape":[
+    {key:"backLeft",label:"Back Left"},{key:"backCenter",label:"Back Center"},{key:"backRight",label:"Back Right"},
+    {key:"midLeft",label:"Mid Left"},{key:"midRight",label:"Mid Right"},
+    {key:"frontLeft",label:"Front Left"},{key:"frontRight",label:"Front Right"}
+  ],
+  "6z_grid":[
+    {key:"backLeft",label:"Back Left"},{key:"backCenter",label:"Back Center"},{key:"backRight",label:"Back Right"},
+    {key:"frontLeft",label:"Front Left"},{key:"frontCenter",label:"Front Center"},{key:"frontRight",label:"Front Right"}
+  ],
+  "9z_grid":[
+    {key:"r1c1",label:"Row1-Col1"},{key:"r1c2",label:"Row1-Col2"},{key:"r1c3",label:"Row1-Col3"},
+    {key:"r2c1",label:"Row2-Col1"},{key:"r2c2",label:"Row2-Col2"},{key:"r2c3",label:"Row2-Col3"},
+    {key:"r3c1",label:"Row3-Col1"},{key:"r3c2",label:"Row3-Col2"},{key:"r3c3",label:"Row3-Col3"}
+  ],
+  "1z_single":[{key:"center",label:"Center"}]
+};
+function getTentZones(){return TENT_ZONES_PRESETS[D.setup.zoneLayout]||TENT_ZONES_PRESETS["5z_ushape"];}
+function zoneLabel(key){var z=getTentZones().find(function(x){return x.key===key;});return z?z.label:"Unassigned";}
+function getTerraCannaWeek(days){
+  var wk=Math.floor(days/7)+1;
+  var row=TERRA_CANNA.find(function(r){return r.week===wk;});
+  return row||TERRA_CANNA[TERRA_CANNA.length-1];
+}
+
 // ── Light distance guide ─────────────────────────────────
 function getLightDistance(setup,stage){
   var w=Number(setup.lightWatts)||150;
@@ -168,21 +234,96 @@ function getWaterSchedule(setup,stage,days){
   return schedules[stage.key]||schedules.veg;
 }
 
-// ── Perpetual harvest calculator ────────────────────────
+// ── Perpetual harvest calculator (slot-based) ────────────
 function getPerpetual(plants,setup){
-  if(!plants||plants.length===0)return null;
+  var numSlots=Number(setup.numSlots)||1;
   var avgDays=Number(setup.avgFlowerDays)||77;
-  var targetGap=Number(setup.harvestGap)||35;
-  var startNextOn=addDays(tod(),targetGap-21);
-  var nextHarvest=null;
-  plants.forEach(function(p){
+  var active=(plants||[]).filter(function(p){return !p.harvested&&p.isPerpetual;});
+
+  // Slot occupancy: each plant occupies a slot until its harvestDate
+  var slots=[];
+  for(var i=0;i<numSlots;i++)slots.push(null);
+  // sort active plants by start date, assign to slots in order
+  var sorted=active.slice().sort(function(a,b){return new Date(a.startDate)-new Date(b.startDate);});
+  sorted.forEach(function(p,i){if(i<numSlots)slots[i]=p;});
+
+  var openSlots=slots.filter(function(s){return s===null;}).length;
+  var occupied=slots.map(function(p,idx){
+    if(!p)return{idx:idx,empty:true,plant:null,harvestDate:null,remaining:0};
+    var totalDays=plantTotalDays(p);
+    var harvestDate=p.harvestDate||addDays(p.startDate,totalDays);
     var days=daysSince(p.startDate);
-    var remaining=avgDays-days;
-    if(remaining>0&&(!nextHarvest||remaining<nextHarvest.remaining)){
-      nextHarvest={name:p.name,remaining:remaining,date:addDays(tod(),remaining)};
+    return{idx:idx,empty:false,plant:p,harvestDate:harvestDate,remaining:Math.max(0,totalDays-days)};
+  });
+
+  // next harvest across all occupied slots
+  var nextHarvest=null;
+  occupied.forEach(function(o){
+    if(!o.empty&&(!nextHarvest||o.remaining<nextHarvest.remaining)){
+      nextHarvest={name:o.plant.name,remaining:o.remaining,date:o.harvestDate};
     }
   });
-  return{startNextOn:startNextOn,nextHarvest:nextHarvest};
+
+  // suggested next start date = earliest slot free date (today if already open)
+  var freeDates=occupied.map(function(o){return o.empty?tod():o.harvestDate;});
+  freeDates.sort();
+  var startNextOn=freeDates[0]||tod();
+
+  return{numSlots:numSlots,openSlots:openSlots,occupied:occupied,nextHarvest:nextHarvest,startNextOn:startNextOn};
+}
+
+// Position-based rotation across locked perpetual pots.
+// Only ONE empty locked pot is "Plant Now" at a time, staggered by harvestGap
+// from the most recently started plant among the locked pots.
+function getZoneRotation(){
+  var zones=(D.setup.perpetualZones||[]).slice();
+  var gap=Number(D.setup.harvestGap)||35;
+  if(!zones.length)return[];
+
+  var statuses=zones.map(function(key){
+    var p=D.plants.find(function(x){return !x.harvested&&x.position===key;});
+    if(p){
+      var totalDays=plantTotalDays(p);
+      var days=daysSince(p.startDate);
+      var harvestDate=p.harvestDate||addDays(p.startDate,totalDays);
+      return{key:key,label:zoneLabel(key),plant:p,status:"growing",remaining:Math.max(0,totalDays-days),harvestDate:harvestDate};
+    }
+    return{key:key,label:zoneLabel(key),plant:null,status:"empty"};
+  });
+
+  // Most recent start date among plants currently in locked pots (growing or harvested-from-this-set isn't tracked, so use growing only + last known)
+  var growing=statuses.filter(function(s){return s.status==="growing";});
+  var mostRecentStart=null;
+  growing.forEach(function(s){
+    var sd=new Date(s.plant.startDate);
+    if(!mostRecentStart||sd>mostRecentStart)mostRecentStart=sd;
+  });
+
+  var emptyOnes=statuses.filter(function(s){return s.status==="empty";});
+  if(emptyOnes.length){
+    if(!mostRecentStart){
+      // nothing planted yet anywhere in rotation - first empty pot is plant-now
+      emptyOnes[0].status="plant_now";
+      emptyOnes[0].waitDays=0;
+    }else{
+      var nextPlantDate=addDays(mostRecentStart.toISOString().slice(0,10),gap);
+      var daysUntil=Math.ceil((new Date(nextPlantDate)-new Date(tod()))/86400000);
+      if(daysUntil<=0){
+        emptyOnes[0].status="plant_now";
+        emptyOnes[0].waitDays=0;
+      }else{
+        emptyOnes[0].status="waiting";
+        emptyOnes[0].waitDays=daysUntil;
+        emptyOnes[0].plantOn=nextPlantDate;
+      }
+      // any additional empty pots beyond the first wait behind it too
+      for(var i=1;i<emptyOnes.length;i++){
+        emptyOnes[i].status="waiting";
+        emptyOnes[i].waitDays=emptyOnes[0].waitDays+(gap*i);
+      }
+    }
+  }
+  return statuses;
 }
 
 // ── Default data ─────────────────────────────────────────
@@ -191,24 +332,37 @@ var D=loadD()||{
   setup:{
     tentSize:"70x70",lightModel:"Mars Hydro FC1500",lightWatts:"150",
     lightSchedule:"18/6",medium:"soil",potSize:"11",phing:false,
-    avgFlowerDays:"77",harvestGap:"35"
+    avgFlowerDays:"77",harvestGap:"35",numSlots:"1",
+    lightHeight:"135",netHeight:"55",canopyMax:"90",
+    zoneLayout:"5z_ushape",perpetualZones:[]
   },
   logs:{},
   showAdvisor:false,advisorLoading:false,advisorText:""
 };
 if(!D.logs)D.logs={};
+if(!D.setup.lightHeight)D.setup.lightHeight="135";
+if(!D.setup.netHeight)D.setup.netHeight="55";
+if(!D.setup.canopyMax)D.setup.canopyMax="90";
+if(!D.setup.zoneLayout)D.setup.zoneLayout="5z_ushape";
+if(!D.setup.numZones)D.setup.numZones=String(TENT_ZONES_PRESETS["5z_ushape"].length);
+if(!D.setup.perpetualZones)D.setup.perpetualZones=[];
 
 var S={
   tab:"plants",
   showAddPlant:false,
+  showEditPlant:false,
   showSetup:false,
   showLog:false,
   activePlantId:null,
   showNutrients:false,
   editingPlantId:null,
-  newPlant:{name:"",strain:"",startDate:tod(),totalDays:"77",notes:""},
+  newPlant:{name:"",strain:"",startDate:tod(),totalDays:"77",harvestDate:addDays(tod(),77),notes:"",position:"",isPerpetual:false},
   newLog:{date:tod(),height:"",notes:"",watered:false,fed:false},
-  advisorLoading:false,advisorText:"",showAdvisor:false
+  newFeed:{date:tod(),nutrients:[{name:"",mlPerL:""}],waterAmount:"",notes:""},
+  newQuickNote:{date:tod(),notes:""},
+  showFeed:false,showQuickNote:false,showTentConfig:false,
+  advisorLoading:false,advisorText:"",showAdvisor:false,
+  selectedZone:"backCenter"
 };
 
 function patch(o){Object.assign(S,o);render();}
@@ -232,13 +386,14 @@ function buildApp(){
   h+='<button onclick="openAdvisor()" style="background:#a78bfa15;border:1.5px solid #a78bfa30;border-radius:10px;padding:6px 10px;color:#a78bfa;cursor:pointer;font-size:13px">🧠</button>';
   h+='</div></div>';
   // Tabs
-  var tabs=[["plants","🌱 Plants"],["today","📋 Today"],["nutrients","🧪 Nutrients"],["perpetual","♻️ Perpetual"],["learn","📚 Learn"]];
+  var tabs=[["plants","🌱 Plants"],["map","🗺️ Map"],["today","📋 Today"],["nutrients","🧪 Nutrients"],["perpetual","♻️ Perpetual"],["learn","📚 Learn"]];
   h+='<div class="tbar">';
   tabs.forEach(function(t){h+='<button onclick="patch({tab:\''+t[0]+'\'})" class="'+(S.tab===t[0]?"active":"")+'">'+t[1]+'</button>';});
   h+='</div>';
   // Content
   h+='<div style="padding:14px;max-width:600px;margin:0 auto;padding-bottom:80px">';
   if(S.tab==="plants")h+=tabPlants();
+  else if(S.tab==="map")h+=tabMap();
   else if(S.tab==="today")h+=tabToday();
   else if(S.tab==="nutrients")h+=tabNutrients();
   else if(S.tab==="perpetual")h+=tabPerpetual();
@@ -246,8 +401,12 @@ function buildApp(){
   h+='</div>';
   // Modals
   if(S.showAddPlant)h+=modalAddPlant();
+  if(S.showEditPlant)h+=modalEditPlant();
   if(S.showSetup)h+=modalSetup();
   if(S.showLog)h+=modalLog();
+  if(S.showFeed)h+=modalFeed();
+  if(S.showQuickNote)h+=modalQuickNote();
+  if(S.showTentConfig)h+=modalTentConfig();
   if(S.showAdvisor)h+=modalAdvisor();
   return h;
 }
@@ -266,9 +425,9 @@ function tabPlants(){
     h+='</div>';
     return h;
   }
-  D.plants.forEach(function(p){
+  D.plants.filter(function(p){return !p.harvested;}).forEach(function(p){
     var days=daysSince(p.startDate);
-    var totalDays=Number(p.totalDays)||77;
+    var totalDays=plantTotalDays(p);
     var stage=getStage(days,totalDays);
     var pct=Math.min((days/totalDays)*100,100);
     var remaining=Math.max(0,totalDays-days);
@@ -300,6 +459,7 @@ function tabPlants(){
     h+=infoCell("💧","Water",water);
     if(lastLog)h+=infoCell("📏","Last Height",lastLog.height?lastLog.height+"cm":"Not logged");
     h+=infoCell("📅","Start Date",p.startDate);
+    h+=infoCell("✂️","Harvest Date",p.harvestDate||addDays(p.startDate,totalDays));
     h+='</div>';
     // Stage tip
     h+='<div style="padding:10px 16px;background:'+stage.color+'08;border-bottom:1px solid var(--border)">';
@@ -309,6 +469,8 @@ function tabPlants(){
     // Actions
     h+='<div style="padding:10px 16px;display:flex;gap:8px">';
     h+='<button data-pid="'+p.id+'" onclick="openLog(this.dataset.pid)" style="flex:1;background:var(--green);color:#071007;border:none;border-radius:10px;padding:9px;font-weight:600;font-size:13px;cursor:pointer">+ Log Week</button>';
+    h+='<button data-pid="'+p.id+'" onclick="openEditPlant(this.dataset.pid)" style="background:var(--bg3);border:1.5px solid var(--border2);border-radius:10px;padding:9px 12px;color:var(--text2);cursor:pointer;font-size:13px">✏️</button>';
+    h+='<button data-pid="'+p.id+'" onclick="markHarvested(this.dataset.pid)" style="background:#fb923c15;border:1.5px solid #fb923c30;border-radius:10px;padding:9px 12px;color:#fb923c;cursor:pointer;font-size:13px">✂️</button>';
     h+='<button data-pid="'+p.id+'" onclick="deletePlant(this.dataset.pid)" style="background:var(--bg3);border:1.5px solid var(--border2);border-radius:10px;padding:9px 12px;color:var(--text3);cursor:pointer;font-size:13px">🗑️</button>';
     h+='</div>';
     h+='</div>';
@@ -320,13 +482,146 @@ function infoCell(icon,label,val){
   return '<div style="background:var(--bg3);border-radius:10px;padding:8px 10px"><div style="font-size:10px;color:var(--text3);font-family:\'DM Mono\',monospace;margin-bottom:2px">'+label+'</div><div style="font-size:12px;color:var(--text);font-weight:500">'+icon+' '+esc(val)+'</div></div>';
 }
 
+// ── MAP TAB ──────────────────────────────────────────────
+function tabMap(){
+  var h='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">';
+  h+='<div style="font-size:11px;color:var(--text3);font-family:\'DM Mono\',monospace">'+esc(D.setup.tentSize)+'cm · '+esc(D.setup.lightModel)+'</div>';
+  h+='<button onclick="patch({showTentConfig:true})" style="background:none;border:1px solid var(--border2);border-radius:8px;padding:4px 9px;font-size:11px;color:var(--text3);cursor:pointer">⚙️ Configure</button>';
+  h+='</div>';
+
+  // Perpetual rotation status strip
+  var rotation=getZoneRotation().slice().sort(function(a,b){
+    var order={growing:0,plant_now:1,waiting:2,empty:3};
+    if(order[a.status]!==order[b.status])return order[a.status]-order[b.status];
+    if(a.status==="growing")return a.remaining-b.remaining;
+    if(a.status==="waiting")return a.waitDays-b.waitDays;
+    return 0;
+  });
+  if(rotation.length){
+    h+='<div style="display:flex;gap:6px;overflow-x:auto;margin-bottom:14px;padding-bottom:2px">';
+    rotation.forEach(function(r){
+      var c="var(--text3)",bg="var(--bg3)",txt="";
+      if(r.status==="plant_now"){c="var(--green)";bg="#4ade8020";txt="🌱 Plant Now";}
+      else if(r.status==="waiting"){c="#fbbf24";bg="#fbbf2420";txt="Wait "+r.waitDays+"d";}
+      else if(r.status==="growing"){c="#60a5fa";bg="#60a5fa20";txt=r.remaining+"d to harvest";}
+      h+='<div onclick="patch({selectedZone:\''+r.key+'\'})" style="flex-shrink:0;border:1px solid '+c+'40;background:'+bg+';border-radius:10px;padding:6px 10px;cursor:pointer">';
+      h+='<div style="font-size:9px;color:var(--text3);font-family:\'DM Mono\',monospace">'+esc(r.label.replace(" 🔒",""))+'</div>';
+      h+='<div style="font-size:11px;font-weight:600;color:'+c+'">'+txt+'</div></div>';
+    });
+    h+='</div>';
+  }
+
+  var lightH=Number(D.setup.lightHeight)||135;
+  var canopyMax=Number(D.setup.canopyMax)||90;
+  var netH=Number(D.setup.netHeight)||55;
+  h+='<div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">';
+  h+='<div style="position:relative;flex:1;height:4px;background:var(--border2);border-radius:4px">';
+  [0,netH,canopyMax,lightH].forEach(function(cm){
+    h+='<div style="position:absolute;top:-4px;left:'+((cm/lightH)*100)+'%;width:2px;height:12px;background:var(--text3)"></div>';
+  });
+  h+='</div></div>';
+  h+='<div style="display:flex;justify-content:space-between;font-size:9px;color:var(--text3);font-family:\'DM Mono\',monospace;margin-bottom:16px">';
+  h+='<span>0 floor</span><span>'+netH+' net</span><span>'+canopyMax+' canopy</span><span>'+lightH+' light</span></div>';
+
+  // Configurable zone grid
+  var rotMap={};
+  getZoneRotation().forEach(function(r){rotMap[r.key]=r;});
+  function cellFor(key){
+    if(!key)return '<div></div>';
+    var p=D.plants.find(function(x){return !x.harvested&&x.position===key;});
+    var active=S.selectedZone===key;
+    var locked=(D.setup.perpetualZones||[]).indexOf(key)>-1;
+    var label=zoneLabel(key)+(locked?' 🔒':"");
+    var border=active?"var(--green)":"var(--border)";
+    var bg=active?"#4ade8015":"var(--bg2)";
+    var name=p?(esc(p.name)+(p.isPerpetual?' ♻️':"")):(locked?"— perpetual, empty —":"— empty —");
+    var sub=p?esc(p.strain||""):"Tap to assign";
+    var feedTag="";
+    if(p){
+      var d=daysSince(p.startDate);
+      var t=getTerraCannaWeek(d);
+      var mix=[["S",t.starter],["G",t.grow],["B",t.bloom],["PK",t.pk],["Bo",t.booster]].filter(function(m){return m[1]>0;}).map(function(m){return m[0]+m[1];}).join(" ");
+      feedTag='<div style="font-size:9px;color:var(--green);font-family:\'DM Mono\',monospace;margin-top:2px">'+(mix||"water only")+'</div>';
+    }
+    if(!p&&locked&&rotMap[key]){
+      var r=rotMap[key];
+      if(r.status==="plant_now")feedTag='<div style="font-size:9px;color:var(--green);font-family:\'DM Mono\',monospace;margin-top:2px">🌱 Plant Now</div>';
+      else if(r.status==="waiting")feedTag='<div style="font-size:9px;color:#fbbf24;font-family:\'DM Mono\',monospace;margin-top:2px">Wait '+r.waitDays+'d</div>';
+    }
+    return '<button onclick="patch({selectedZone:\''+key+'\'})" style="text-align:left;border:1.5px solid '+border+';background:'+bg+';border-radius:14px;padding:10px;min-height:88px;display:flex;flex-direction:column;justify-content:flex-end;cursor:pointer">'
+      +'<div style="font-size:9px;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;font-family:\'DM Mono\',monospace">'+label+'</div>'
+      +'<div style="font-size:13px;font-weight:600;color:'+(p?"var(--text)":"var(--text3)")+';margin-top:3px">'+name+'</div>'
+      +'<div style="font-size:10px;color:var(--text3)">'+sub+'</div>'+feedTag+'</button>';
+  }
+  // Layout-specific grid arrangement
+  var layout=D.setup.zoneLayout;
+  var rows=[];
+  if(layout==="5z_ushape")rows=[["backLeft","backCenter","backRight"],["frontLeft",null,"frontRight"]];
+  else if(layout==="7z_ushape")rows=[["backLeft","backCenter","backRight"],["midLeft",null,"midRight"],["frontLeft",null,"frontRight"]];
+  else if(layout==="4z_grid")rows=[["backLeft","backRight"],["frontLeft","frontRight"]];
+  else if(layout==="6z_grid")rows=[["backLeft","backCenter","backRight"],["frontLeft","frontCenter","frontRight"]];
+  else if(layout==="9z_grid")rows=[["r1c1","r1c2","r1c3"],["r2c1","r2c2","r2c3"],["r3c1","r3c2","r3c3"]];
+  else rows=[["center"]];
+  rows.forEach(function(row,i){
+    h+='<div style="display:grid;grid-template-columns:repeat('+row.length+',1fr);gap:8px;margin-bottom:'+(i===rows.length-1?"18px":"8px")+'">';
+    h+=row.map(cellFor).join("");
+    h+='</div>';
+  });
+
+  // Detail panel for selected zone
+  var sel=D.plants.find(function(x){return !x.harvested&&x.position===S.selectedZone;});
+  var zoneLocked=(D.setup.perpetualZones||[]).indexOf(S.selectedZone)>-1;
+  h+='<div class="card card-pad">';
+  h+='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">';
+  h+='<div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;font-family:\'DM Mono\',monospace">'+zoneLabel(S.selectedZone)+'</div>';
+  h+='<button onclick="togglePerpetualZone(\''+S.selectedZone+'\')" style="background:'+(zoneLocked?"#a78bfa20":"var(--bg3)")+';border:1px solid '+(zoneLocked?"#a78bfa40":"var(--border2)")+';border-radius:100px;padding:4px 10px;font-size:11px;font-weight:600;color:'+(zoneLocked?"#a78bfa":"var(--text3)")+';cursor:pointer">'+(zoneLocked?"🔒 Perpetual Pot":"🔓 Make Perpetual")+'</button>';
+  h+='</div>';
+  if(!sel){
+    h+='<div style="font-size:13px;color:var(--text3)">'+(zoneLocked?"This pot is locked as Perpetual — the next plant you add here will auto-join the rotation.":"No plant assigned to this position.")+'</div>';
+    h+='<button onclick="patch({showAddPlant:true,newPlant:Object.assign({},S.newPlant,{position:\''+S.selectedZone+'\',isPerpetual:'+(zoneLocked)+'})})" class="btn btn-green" style="width:100%;margin-top:12px">+ Add Plant Here</button>';
+  }else{
+    var days=daysSince(sel.startDate);
+    var totalDays=plantTotalDays(sel);
+    var stage=getStage(days,totalDays);
+    var water=getWaterSchedule(D.setup,stage,days);
+    var tc=getTerraCannaWeek(days);
+    h+='<div style="font-size:16px;font-weight:700;color:var(--text)">'+stage.icon+' '+esc(sel.name)+'</div>';
+    h+='<div style="font-size:12px;color:var(--text3);margin-bottom:10px;font-family:\'DM Mono\',monospace">'+esc(sel.strain||"Unknown strain")+' · Day '+days+'</div>';
+    h+='<div style="display:inline-block;background:'+stage.color+'20;border:1px solid '+stage.color+'40;border-radius:100px;padding:3px 10px;font-size:11px;font-weight:600;color:'+stage.color+';margin-bottom:12px">'+stage.name+'</div>';
+    h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">';
+    h+=infoCell("💧","Water",water);
+    h+=infoCell("🧪","Terra Canna","Wk"+tc.week+" "+tc.note);
+    h+='</div>';
+    h+='<div style="background:var(--bg3);border-radius:10px;padding:10px;margin-bottom:12px">';
+    h+='<div style="font-size:10px;color:var(--text3);font-family:\'DM Mono\',monospace;margin-bottom:4px">FEED MIX (per L, this week)</div>';
+    h+='<div style="font-size:12px;color:var(--text2)">Starter '+tc.starter+' · Grow '+tc.grow+' · Bloom '+tc.bloom+' · PK '+tc.pk+' · Booster '+tc.booster+'</div>';
+    h+='</div>';
+    var plog=D.logs[sel.id]||[];
+    var last=plog.length?plog[plog.length-1]:null;
+    if(last){
+      h+='<div style="font-size:11px;color:var(--text3);margin-bottom:10px">Last entry '+last.date+': '+(last.nutrient?"🧪 "+esc(last.nutrient)+(last.mlPerL?" @"+esc(last.mlPerL)+"ml/L":""):esc(last.notes||""))+'</div>';
+    }
+    h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">';
+    h+='<button data-pid="'+sel.id+'" onclick="openFeed(this.dataset.pid)" style="background:#4ade8015;border:1.5px solid #4ade8030;border-radius:10px;padding:10px;color:var(--green);cursor:pointer;font-size:13px;font-weight:600">🧪 Feed / Water</button>';
+    h+='<button data-pid="'+sel.id+'" onclick="openQuickNote(this.dataset.pid)" style="background:#60a5fa15;border:1.5px solid #60a5fa30;border-radius:10px;padding:10px;color:#60a5fa;cursor:pointer;font-size:13px;font-weight:600">✂️ Trim / Action</button>';
+    h+='</div>';
+    h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px">';
+    h+='<button data-pid="'+sel.id+'" onclick="openLog(this.dataset.pid)" style="background:var(--bg3);border:1.5px solid var(--border2);border-radius:10px;padding:10px;color:var(--text2);cursor:pointer;font-size:13px;font-weight:600">📋 Full Log</button>';
+    h+='<button data-pid="'+sel.id+'" onclick="if(confirm(\''+esc(sel.name).replace(/'/g,"\\'")+' — mark as harvested?\'))markHarvested(this.dataset.pid)" style="background:#fb923c15;border:1.5px solid #fb923c30;border-radius:10px;padding:10px;color:#fb923c;cursor:pointer;font-size:13px;font-weight:600">🌾 Harvest</button>';
+    h+='</div>';
+    h+='<button data-pid="'+sel.id+'" onclick="openEditPlant(this.dataset.pid)" class="btn btn-outline" style="width:100%">✏️ Edit / Reassign Position</button>';
+  }
+  h+='</div>';
+  return h;
+}
+
 // ── TODAY TAB ────────────────────────────────────────────
 function tabToday(){
   if(D.plants.length===0)return'<div style="text-align:center;padding:48px 20px;color:var(--text3)">Add a plant first to see today\'s tasks</div>';
   var h='<div style="font-size:13px;color:var(--text2);margin-bottom:14px">'+new Date().toDateString()+'</div>';
-  D.plants.forEach(function(p){
+  D.plants.filter(function(p){return !p.harvested;}).forEach(function(p){
     var days=daysSince(p.startDate);
-    var totalDays=Number(p.totalDays)||77;
+    var totalDays=plantTotalDays(p);
     var stage=getStage(days,totalDays);
     var tips=getWeeklyTips(days,D.setup);
     var water=getWaterSchedule(D.setup,stage,days);
@@ -428,38 +723,58 @@ function tabPerpetual(){
   var perp=getPerpetual(D.plants,D.setup);
   var h='<div style="margin-bottom:14px">';
   h+='<div style="font-size:15px;font-weight:700;color:var(--text);margin-bottom:4px">Perpetual Harvest Planner</div>';
-  h+='<div style="font-size:12px;color:var(--text3)">Plan your grows for continuous monthly harvests</div></div>';
+  h+='<div style="font-size:12px;color:var(--text3)">Slot-based rotation — fill your tent, never leave space idle</div></div>';
+  h+='<div style="font-size:11px;color:var(--text3);background:var(--bg3);border-radius:8px;padding:8px 10px;margin-bottom:12px">Only plants marked <span style="color:#a78bfa">♻️ Perpetual</span> (toggle on the Map tab) count toward slots below.</div>';
   // Target settings
   h+='<div class="card card-pad" style="margin-bottom:12px">';
-  h+='<div style="font-size:13px;font-weight:600;color:var(--text);margin-bottom:12px">⚙️ Your Target Settings</div>';
+  h+='<div style="font-size:13px;font-weight:600;color:var(--text);margin-bottom:12px">⚙️ Tent Slots</div>';
   h+='<div style="display:flex;flex-direction:column;gap:10px">';
-  h+='<div><div class="lbl">Target harvest gap (days)</div>';
-  h+='<input id="p-gap" type="number" class="inp" value="'+(D.setup.harvestGap||35)+'" placeholder="35"/></div>';
-  h+='<div><div class="lbl">Average flower time (days)</div>';
+  h+='<div><div class="lbl">Number of plant slots in tent</div>';
+  h+='<input id="p-slots" type="number" min="1" class="inp" value="'+(D.setup.numSlots||1)+'" placeholder="1"/></div>';
+  h+='<div><div class="lbl">Default total days (used when no strain set)</div>';
   h+='<input id="p-days" type="number" class="inp" value="'+(D.setup.avgFlowerDays||77)+'" placeholder="77"/></div>';
   h+='<button onclick="savePerp()" class="btn btn-green" style="width:100%">Update Settings</button>';
   h+='</div></div>';
-  if(perp){
-    // Next harvest
-    if(perp.nextHarvest){
-      h+='<div style="background:var(--green)10;border:1.5px solid var(--green)25;border-radius:14px;padding:14px;margin-bottom:12px">';
-      h+='<div style="font-size:11px;color:var(--green);font-weight:600;margin-bottom:4px">🌺 NEXT HARVEST</div>';
-      h+='<div style="font-size:16px;font-weight:700;color:var(--text)">'+esc(perp.nextHarvest.name)+'</div>';
-      h+='<div style="font-size:13px;color:var(--green);margin-top:4px">~'+perp.nextHarvest.remaining+' days away ('+perp.nextHarvest.date+')</div>';
-      h+='</div>';
+
+  // Slot status grid
+  h+='<div class="card card-pad" style="margin-bottom:12px">';
+  h+='<div style="font-size:13px;font-weight:600;color:var(--text);margin-bottom:12px">🪴 Slot Status ('+perp.openSlots+' open / '+perp.numSlots+')</div>';
+  perp.occupied.forEach(function(o){
+    if(o.empty){
+      h+='<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--border)">';
+      h+='<span style="font-size:13px;color:var(--text3)">Slot '+(o.idx+1)+' — empty</span>';
+      h+='<span style="font-size:11px;color:var(--green);font-weight:600">Plant now 🌱</span></div>';
+    }else{
+      var stage=getStage(daysSince(o.plant.startDate),plantTotalDays(o.plant));
+      h+='<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--border)">';
+      h+='<span style="font-size:13px;color:var(--text)">Slot '+(o.idx+1)+' — '+stage.icon+' '+esc(o.plant.name)+'</span>';
+      h+='<span style="font-size:11px;color:'+stage.color+';font-family:\'DM Mono\',monospace">'+o.remaining+'d left</span></div>';
     }
-    // When to start next
-    h+='<div style="background:#fb923c10;border:1.5px solid #fb923c25;border-radius:14px;padding:14px;margin-bottom:12px">';
-    h+='<div style="font-size:11px;color:#fb923c;font-weight:600;margin-bottom:4px">🌱 START NEXT PLANT</div>';
-    h+='<div style="font-size:14px;font-weight:700;color:var(--text)">'+perp.startNextOn+'</div>';
-    h+='<div style="font-size:12px;color:var(--text2);margin-top:4px">To get a harvest every ~'+D.setup.harvestGap+' days, start your next seed on this date</div>';
+  });
+  h+='</div>';
+
+  // Next harvest
+  if(perp.nextHarvest){
+    h+='<div style="background:var(--green)10;border:1.5px solid var(--green)25;border-radius:14px;padding:14px;margin-bottom:12px">';
+    h+='<div style="font-size:11px;color:var(--green);font-weight:600;margin-bottom:4px">🌺 NEXT HARVEST</div>';
+    h+='<div style="font-size:16px;font-weight:700;color:var(--text)">'+esc(perp.nextHarvest.name)+'</div>';
+    h+='<div style="font-size:13px;color:var(--green);margin-top:4px">~'+perp.nextHarvest.remaining+' days away ('+perp.nextHarvest.date+')</div>';
     h+='</div>';
-    // Visual timeline
+  }
+  // When to start next
+  h+='<div style="background:#fb923c10;border:1.5px solid #fb923c25;border-radius:14px;padding:14px;margin-bottom:12px">';
+  h+='<div style="font-size:11px;color:#fb923c;font-weight:600;margin-bottom:4px">🌱 NEXT FREE SLOT</div>';
+  h+='<div style="font-size:14px;font-weight:700;color:var(--text)">'+perp.startNextOn+(perp.openSlots>0?" (now)":"")+'</div>';
+  h+='<div style="font-size:12px;color:var(--text2);margin-top:4px">'+(perp.openSlots>0?"You have "+perp.openSlots+" open slot(s) — plant today.":"Earliest slot frees up on this date.")+'</div>';
+  h+='</div>';
+
+  // Visual timeline of active plants
+  if(D.plants.filter(function(p){return !p.harvested;}).length>0){
     h+='<div class="card card-pad">';
-    h+='<div style="font-size:13px;font-weight:600;color:var(--text);margin-bottom:12px">📅 Plant Timeline</div>';
-    D.plants.forEach(function(p,i){
+    h+='<div style="font-size:13px;font-weight:600;color:var(--text);margin-bottom:12px">📅 Active Plant Timeline</div>';
+    D.plants.filter(function(p){return !p.harvested;}).forEach(function(p){
       var days=daysSince(p.startDate);
-      var totalDays=Number(p.totalDays)||77;
+      var totalDays=plantTotalDays(p);
       var stage=getStage(days,totalDays);
       var pct=Math.min((days/totalDays)*100,100);
       h+='<div style="margin-bottom:10px">';
@@ -468,7 +783,7 @@ function tabPerpetual(){
       h+='<span style="font-size:11px;color:'+stage.color+';font-family:\'DM Mono\',monospace">Day '+days+'/'+totalDays+'</span>';
       h+='</div>';
       h+='<div class="pt" style="height:8px"><div class="pb" style="width:'+pct+'%;background:linear-gradient(90deg,'+stage.color+','+stage.color+'66);height:8px"></div></div>';
-      h+='<div style="font-size:10px;color:var(--text3);margin-top:2px">'+stage.name+' — '+Math.max(0,totalDays-days)+' days to harvest</div>';
+      h+='<div style="font-size:10px;color:var(--text3);margin-top:2px">'+stage.name+' — harvest '+(p.harvestDate||addDays(p.startDate,totalDays))+'</div>';
       h+='</div>';
     });
     h+='</div>';
@@ -516,14 +831,49 @@ function modalAddPlant(){
   h+='<div style="font-size:16px;font-weight:700;color:var(--text);margin-bottom:18px">🌱 Add New Plant</div>';
   h+='<div style="display:flex;flex-direction:column;gap:12px">';
   h+='<div><div class="lbl">Plant Name (nickname)</div><input id="ap-name" class="inp" placeholder="e.g. Girl #1, Big Berta" value="'+esc(S.newPlant.name)+'"/></div>';
-  h+='<div><div class="lbl">Strain</div><input id="ap-strain" class="inp" placeholder="e.g. Royal Dwarf, Quick One, Amnesia Haze Auto" value="'+esc(S.newPlant.strain)+'"/></div>';
-  h+='<div><div class="lbl">Start Date (seed in ground)</div><input id="ap-date" type="date" class="inp" value="'+S.newPlant.startDate+'"/></div>';
-  h+='<div><div class="lbl">Expected Total Days (check seed bank)</div><input id="ap-days" type="number" class="inp" placeholder="77" value="'+S.newPlant.totalDays+'"/></div>';
+  h+='<div><div class="lbl">Strain</div><select id="ap-strain" class="inp" onchange="onStrainPick()"><option value="">— Select RQS strain —</option>'+RQS_STRAINS.map(function(s){return '<option value="'+esc(s.name)+'" '+(S.newPlant.strain===s.name?"selected":"")+'>'+esc(s.name)+' ('+s.days+'d)</option>';}).join("")+'</select></div>';
+  h+='<div><div class="lbl">Strain name (editable / custom)</div><input id="ap-strain-name" class="inp" placeholder="e.g. Royal Dwarf" value="'+esc(S.newPlant.strain)+'"/></div>';
+  h+='<div><div class="lbl">Start Date (seed in ground)</div><input id="ap-date" type="date" class="inp" value="'+S.newPlant.startDate+'" onchange="onDateOrDaysChange()"/></div>';
+  h+='<div><div class="lbl">Expected Total Days (editable)</div><input id="ap-days" type="number" class="inp" placeholder="77" value="'+S.newPlant.totalDays+'" onchange="onDateOrDaysChange()"/></div>';
+  h+='<div><div class="lbl">Expected Harvest Date (auto, editable)</div><input id="ap-harvest" type="date" class="inp" value="'+(S.newPlant.harvestDate||addDays(S.newPlant.startDate,Number(S.newPlant.totalDays)||77))+'"/></div>';
+  h+='<div><div class="lbl">Tent Position</div><select id="ap-position" class="inp">'+
+    '<option value="">— Unassigned —</option>'+
+    getTentZones().map(function(z){return '<option value="'+z.key+'" '+(S.newPlant.position===z.key?"selected":"")+'>'+z.label+'</option>';}).join("")+
+    '</select></div>';
+  h+='<label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text2)"><input id="ap-perpetual" type="checkbox" '+(S.newPlant.isPerpetual?"checked":"")+'/> Part of Perpetual Harvest rotation</label>';
   h+='<div><div class="lbl">Notes (optional)</div><textarea id="ap-notes" class="inp" rows="2" placeholder="Anything you want to remember..." style="resize:none">'+esc(S.newPlant.notes)+'</textarea></div>';
   h+='<button onclick="submitAddPlant()" class="btn btn-green" style="width:100%">Start Growing 🌱</button>';
   h+='<button onclick="patch({showAddPlant:false})" class="btn btn-outline" style="width:100%">Cancel</button>';
   h+='</div></div></div>';
   return h;
+}
+
+function modalEditPlant(){
+  var p=D.plants.find(function(x){return x.id===S.editingPlantId;});
+  if(!p)return"";
+  var h='<div class="mbg" onclick="if(event.target===this)patch({showEditPlant:false})"><div class="modal">';
+  h+='<div class="modal-handle"></div>';
+  h+='<div style="font-size:16px;font-weight:700;color:var(--text);margin-bottom:18px">✏️ Edit Plant</div>';
+  h+='<div style="display:flex;flex-direction:column;gap:12px">';
+  h+='<div><div class="lbl">Plant Name</div><input id="ep-name" class="inp" value="'+esc(p.name)+'"/></div>';
+  h+='<div><div class="lbl">Strain</div><input id="ep-strain" class="inp" value="'+esc(p.strain)+'"/></div>';
+  h+='<div><div class="lbl">Start Date</div><input id="ep-date" type="date" class="inp" value="'+p.startDate+'" onchange="onEpDateOrDays()"/></div>';
+  h+='<div><div class="lbl">Total Days</div><input id="ep-days" type="number" class="inp" value="'+(p.totalDays||plantTotalDays(p))+'" onchange="onEpDateOrDays()"/></div>';
+  h+='<div><div class="lbl">Harvest Date (editable)</div><input id="ep-harvest" type="date" class="inp" value="'+(p.harvestDate||addDays(p.startDate,plantTotalDays(p)))+'"/></div>';
+  h+='<div><div class="lbl">Tent Position</div><select id="ep-position" class="inp">'+
+    '<option value="">— Unassigned —</option>'+
+    getTentZones().map(function(z){return '<option value="'+z.key+'" '+((p.position||"")===z.key?"selected":"")+'>'+z.label+'</option>';}).join("")+
+    '</select></div>';
+  h+='<label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text2)"><input id="ep-perpetual" type="checkbox" '+(p.isPerpetual?"checked":"")+'/> Part of Perpetual Harvest rotation</label>';
+  h+='<button onclick="submitEditPlant()" class="btn btn-green" style="width:100%">Save Changes</button>';
+  h+='<button onclick="patch({showEditPlant:false})" class="btn btn-outline" style="width:100%">Cancel</button>';
+  h+='</div></div></div>';
+  return h;
+}
+function onEpDateOrDays(){
+  var start=(document.getElementById("ep-date")||{}).value||tod();
+  var days=Number((document.getElementById("ep-days")||{}).value)||77;
+  document.getElementById("ep-harvest").value=addDays(start,days);
 }
 
 function modalSetup(){
@@ -568,6 +918,82 @@ function modalLog(){
   return h;
 }
 
+function modalFeed(){
+  var p=D.plants.find(function(x){return x.id===S.activePlantId;});
+  if(!p)return "";
+  var days=daysSince(p.startDate);
+  var tc=getTerraCannaWeek(days);
+  var f=S.newFeed;
+  var h='<div class="mbg" onclick="if(event.target===this)patch({showFeed:false})"><div class="modal">';
+  h+='<div class="modal-handle"></div>';
+  h+='<div style="font-size:16px;font-weight:700;color:var(--text);margin-bottom:4px">🧪 Feed '+esc(p.name)+'</div>';
+  h+='<div style="font-size:12px;color:var(--text3);margin-bottom:14px">Day '+days+' — Terra Canna Week '+tc.week+' ('+esc(tc.note)+')</div>';
+  h+='<div style="background:var(--bg3);border-radius:10px;padding:10px;margin-bottom:14px;font-size:12px;color:var(--text2)">Suggested mix: Starter '+tc.starter+' · Grow '+tc.grow+' · Bloom '+tc.bloom+' · PK '+tc.pk+' · Booster '+tc.booster+' ml/L</div>';
+  h+='<div style="display:flex;flex-direction:column;gap:12px">';
+  h+='<div><div class="lbl">Date</div><input id="fd-date" type="date" class="inp" value="'+f.date+'"/></div>';
+  h+='<div class="lbl">Nutrients Used</div>';
+  f.nutrients.forEach(function(n,i){
+    h+='<div style="display:flex;gap:8px;align-items:flex-end" data-feedrow="'+i+'">';
+    h+='<div style="flex:2"><input data-fd-name="'+i+'" class="inp" placeholder="e.g. Terra Canna Bloom" value="'+esc(n.name)+'"/></div>';
+    h+='<div style="flex:1"><input data-fd-ml="'+i+'" type="number" step="0.1" class="inp" placeholder="ml/L" value="'+esc(n.mlPerL)+'"/></div>';
+    h+=(f.nutrients.length>1?'<button onclick="removeFeedRow('+i+')" style="background:none;border:none;color:var(--text3);font-size:18px;padding:0 4px;cursor:pointer">×</button>':'<div style="width:26px"></div>');
+    h+='</div>';
+  });
+  h+='<button onclick="addFeedRow()" style="background:none;border:1px dashed var(--border2);border-radius:8px;padding:8px;font-size:12px;color:var(--text3);cursor:pointer">+ Add another nutrient</button>';
+  h+='<div><div class="lbl">Water Given (L)</div><input id="fd-water" type="number" step="0.1" class="inp" placeholder="e.g. 1.5" value="'+esc(f.waterAmount)+'"/></div>';
+  h+='<div><div class="lbl">Notes (optional)</div><textarea id="fd-notes" class="inp" rows="2" placeholder="pH, runoff, deficiency signs..." style="resize:none">'+esc(f.notes)+'</textarea></div>';
+  h+='<button onclick="submitFeed()" class="btn btn-green" style="width:100%">Save Feed Entry</button>';
+  h+='<button onclick="patch({showFeed:false})" class="btn btn-outline" style="width:100%">Cancel</button>';
+  h+='</div></div></div>';
+  return h;
+}
+
+function modalQuickNote(){
+  var p=D.plants.find(function(x){return x.id===S.activePlantId;});
+  if(!p)return "";
+  var n=S.newQuickNote;
+  var h='<div class="mbg" onclick="if(event.target===this)patch({showQuickNote:false})"><div class="modal">';
+  h+='<div class="modal-handle"></div>';
+  h+='<div style="font-size:16px;font-weight:700;color:var(--text);margin-bottom:14px">✂️ Trim / Action — '+esc(p.name)+'</div>';
+  h+='<div style="display:flex;flex-direction:column;gap:12px">';
+  h+='<div><div class="lbl">Date</div><input id="qn-date" type="date" class="inp" value="'+n.date+'"/></div>';
+  h+='<div><div class="lbl">What did you do?</div><textarea id="qn-notes" class="inp" rows="3" placeholder="e.g. Stripped undergrowth below net, tucked 2 shoots..." style="resize:none">'+esc(n.notes)+'</textarea></div>';
+  h+='<button onclick="submitQuickNote()" class="btn btn-green" style="width:100%">Save Entry</button>';
+  h+='<button onclick="patch({showQuickNote:false})" class="btn btn-outline" style="width:100%">Cancel</button>';
+  h+='</div></div></div>';
+  return h;
+}
+
+function modalTentConfig(){
+  var s=D.setup;
+  var h='<div class="mbg" onclick="if(event.target===this)patch({showTentConfig:false})"><div class="modal">';
+  h+='<div class="modal-handle"></div>';
+  h+='<div style="font-size:16px;font-weight:700;color:var(--text);margin-bottom:4px">⚙️ Tent Configuration</div>';
+  h+='<div style="font-size:12px;color:var(--text3);margin-bottom:16px">Set this up to match your own tent. Changes apply to the Map tab.</div>';
+  h+='<div style="display:flex;flex-direction:column;gap:12px">';
+  h+='<div><div class="lbl">Tent Footprint (e.g. 70x70, 80x80, 100x100)</div><input id="tc-size" class="inp" value="'+esc(s.tentSize)+'"/></div>';
+  h+='<div><div class="lbl">Light Model</div><input id="tc-light" class="inp" placeholder="e.g. Mars Hydro FC1500" value="'+esc(s.lightModel)+'"/></div>';
+  h+='<div><div class="lbl">Light Wattage (W)</div><input id="tc-watts" type="number" class="inp" value="'+esc(s.lightWatts)+'"/></div>';
+  h+='<div style="display:flex;gap:10px">';
+  h+='<div style="flex:1"><div class="lbl">Light Height (cm from floor)</div><input id="tc-lightheight" type="number" class="inp" value="'+esc(s.lightHeight)+'"/></div>';
+  h+='<div style="flex:1"><div class="lbl">Canopy Max (cm)</div><input id="tc-canopy" type="number" class="inp" value="'+esc(s.canopyMax)+'"/></div>';
+  h+='</div>';
+  h+='<div><div class="lbl">Trellis Net Height (cm from floor)</div><input id="tc-netheight" type="number" class="inp" value="'+esc(s.netHeight)+'"/></div>';
+  h+='<div><div class="lbl">Pot Size (Liters)</div><input id="tc-pot" type="number" class="inp" value="'+esc(s.potSize)+'"/></div>';
+  h+='<div><div class="lbl">Number of Plants / Layout</div><select id="tc-layout" class="inp">'
+    +'<option value="1z_single" '+(s.zoneLayout==="1z_single"?"selected":"")+'>1 plant — single zone</option>'
+    +'<option value="4z_grid" '+(s.zoneLayout==="4z_grid"?"selected":"")+'>4 plants — 2x2 grid</option>'
+    +'<option value="5z_ushape" '+(s.zoneLayout==="5z_ushape"?"selected":"")+'>5 plants — U-shape (3 back, 2 front)</option>'
+    +'<option value="7z_ushape" '+(s.zoneLayout==="7z_ushape"?"selected":"")+'>7 plants — U-shape (3 back, 2 mid, 2 front)</option>'
+    +'<option value="6z_grid" '+(s.zoneLayout==="6z_grid"?"selected":"")+'>6 plants — 3x2 grid</option>'
+    +'<option value="9z_grid" '+(s.zoneLayout==="9z_grid"?"selected":"")+'>9 plants — 3x3 grid</option>'
+    +'</select></div>';
+  h+='<button onclick="submitTentConfig()" class="btn btn-green" style="width:100%">Save Configuration</button>';
+  h+='<button onclick="patch({showTentConfig:false})" class="btn btn-outline" style="width:100%">Cancel</button>';
+  h+='</div></div></div>';
+  return h;
+}
+
 function modalAdvisor(){
   var h='<div class="mbg" onclick="if(event.target===this)patch({showAdvisor:false})"><div class="modal">';
   h+='<div class="modal-handle"></div>';
@@ -600,17 +1026,36 @@ function modalAdvisor(){
 // ── Events & Actions ─────────────────────────────────────
 function bindEv(){}
 
+function onStrainPick(){
+  var sel=(document.getElementById("ap-strain")||{}).value||"";
+  if(sel&&sel!=="Custom / Other"){
+    var d=strainDays(sel);
+    document.getElementById("ap-strain-name").value=sel;
+    document.getElementById("ap-days").value=d;
+    var start=(document.getElementById("ap-date")||{}).value||tod();
+    document.getElementById("ap-harvest").value=addDays(start,d);
+  }
+}
+function onDateOrDaysChange(){
+  var start=(document.getElementById("ap-date")||{}).value||tod();
+  var days=Number((document.getElementById("ap-days")||{}).value)||77;
+  document.getElementById("ap-harvest").value=addDays(start,days);
+}
+
 function submitAddPlant(){
   var name=(document.getElementById("ap-name")||{}).value||"";name=name.trim();
-  var strain=(document.getElementById("ap-strain")||{}).value||"";
+  var strain=(document.getElementById("ap-strain-name")||{}).value||"";
   var startDate=(document.getElementById("ap-date")||{}).value||tod();
   var totalDays=(document.getElementById("ap-days")||{}).value||"77";
+  var harvestDate=(document.getElementById("ap-harvest")||{}).value||addDays(startDate,Number(totalDays));
   var notes=(document.getElementById("ap-notes")||{}).value||"";
+  var position=(document.getElementById("ap-position")||{}).value||"";
+  var isPerpetual=(document.getElementById("ap-perpetual")&&document.getElementById("ap-perpetual").checked)||(D.setup.perpetualZones||[]).indexOf(position)>-1;
   if(!name){showToast("Enter a plant name","#f87171");return;}
-  var p={id:uid(),name:name,strain:strain,startDate:startDate,totalDays:totalDays,notes:notes};
+  var p={id:uid(),name:name,strain:strain,startDate:startDate,totalDays:totalDays,harvestDate:harvestDate,notes:notes,position:position,isPerpetual:isPerpetual,harvested:false};
   D.plants.push(p);
   if(!D.logs[p.id])D.logs[p.id]=[];
-  saveD(D);patch({showAddPlant:false,newPlant:{name:"",strain:"",startDate:tod(),totalDays:"77",notes:""}});
+  saveD(D);patch({showAddPlant:false,newPlant:{name:"",strain:"",startDate:tod(),totalDays:"77",harvestDate:addDays(tod(),77),notes:"",position:"",isPerpetual:false}});
   showToast("🌱 "+name+" added! Happy growing!");
 }
 
@@ -639,6 +1084,121 @@ function submitLog(){
   saveD(D);patch({showLog:false});showToast("Log entry saved!");
 }
 
+function markHarvested(pid){
+  var p=D.plants.find(function(x){return x.id===pid;});
+  if(!p)return;
+  p.harvested=true;p.harvestedOn=tod();
+  saveD(D);render();showToast("✂️ "+p.name+" marked harvested!");
+}
+
+function togglePerpetual(pid){
+  var p=D.plants.find(function(x){return x.id===pid;});if(!p)return;
+  p.isPerpetual=!p.isPerpetual;
+  if(p.isPerpetual&&p.position&&(D.setup.perpetualZones||[]).indexOf(p.position)===-1){
+    D.setup.perpetualZones=(D.setup.perpetualZones||[]).concat([p.position]);
+  }
+  saveD(D);render();showToast(p.isPerpetual?"♻️ "+p.name+" set as Perpetual":p.name+" set as Normal");
+}
+
+function togglePerpetualZone(key){
+  var zones=D.setup.perpetualZones||[];
+  var idx=zones.indexOf(key);
+  if(idx>-1){
+    zones.splice(idx,1);
+    var occ=D.plants.find(function(x){return !x.harvested&&x.position===key;});
+    if(occ)occ.isPerpetual=false;
+    showToast(zoneLabel(key)+" unlocked");
+  }else{
+    zones.push(key);
+    var occ2=D.plants.find(function(x){return !x.harvested&&x.position===key;});
+    if(occ2)occ2.isPerpetual=true;
+    showToast("🔒 "+zoneLabel(key)+" locked as Perpetual");
+  }
+  D.setup.perpetualZones=zones;
+  saveD(D);render();
+}
+
+function submitTentConfig(){
+  D.setup.tentSize=(document.getElementById("tc-size")||{}).value||D.setup.tentSize;
+  D.setup.lightModel=(document.getElementById("tc-light")||{}).value||D.setup.lightModel;
+  D.setup.lightWatts=(document.getElementById("tc-watts")||{}).value||D.setup.lightWatts;
+  D.setup.lightHeight=(document.getElementById("tc-lightheight")||{}).value||D.setup.lightHeight;
+  D.setup.canopyMax=(document.getElementById("tc-canopy")||{}).value||D.setup.canopyMax;
+  D.setup.netHeight=(document.getElementById("tc-netheight")||{}).value||D.setup.netHeight;
+  D.setup.potSize=(document.getElementById("tc-pot")||{}).value||D.setup.potSize;
+  D.setup.zoneLayout=(document.getElementById("tc-layout")||{}).value||D.setup.zoneLayout;
+  saveD(D);patch({showTentConfig:false});showToast("⚙️ Tent configuration saved!");
+}
+
+function openFeed(pid){
+  patch({showFeed:true,activePlantId:pid,newFeed:{date:tod(),nutrients:[{name:"",mlPerL:""}],waterAmount:"",notes:""}});
+}
+function readFeedRowsFromDOM(){
+  var rows=document.querySelectorAll('[data-feedrow]');
+  var out=[];
+  rows.forEach(function(row){
+    var i=row.getAttribute('data-feedrow');
+    var nameEl=document.querySelector('[data-fd-name="'+i+'"]');
+    var mlEl=document.querySelector('[data-fd-ml="'+i+'"]');
+    out.push({name:nameEl?nameEl.value:"",mlPerL:mlEl?mlEl.value:""});
+  });
+  return out.length?out:[{name:"",mlPerL:""}];
+}
+function addFeedRow(){
+  var rows=readFeedRowsFromDOM();
+  rows.push({name:"",mlPerL:""});
+  patch({newFeed:Object.assign({},S.newFeed,{nutrients:rows})});
+}
+function removeFeedRow(i){
+  var rows=readFeedRowsFromDOM();
+  rows.splice(i,1);
+  if(!rows.length)rows.push({name:"",mlPerL:""});
+  patch({newFeed:Object.assign({},S.newFeed,{nutrients:rows})});
+}
+function submitFeed(){
+  var pid=S.activePlantId;if(!pid)return;
+  var p=D.plants.find(function(x){return x.id===pid;});if(!p)return;
+  var date=(document.getElementById("fd-date")||{}).value||tod();
+  var nutrients=readFeedRowsFromDOM().filter(function(n){return n.name||n.mlPerL;});
+  var waterAmount=(document.getElementById("fd-water")||{}).value||"";
+  var notes=(document.getElementById("fd-notes")||{}).value||"";
+  var nutrientSummary=nutrients.map(function(n){return n.name+(n.mlPerL?" @"+n.mlPerL+"ml/L":"");}).join(", ");
+  if(!D.logs[pid])D.logs[pid]=[];
+  D.logs[pid].push({id:uid(),date:date,height:"",watered:true,fed:true,nutrients:nutrients,nutrient:nutrientSummary,waterAmount:waterAmount,notes:notes});
+  saveD(D);patch({showFeed:false});showToast("🧪 Feed logged for "+p.name);
+}
+
+function openQuickNote(pid){
+  patch({showQuickNote:true,activePlantId:pid,newQuickNote:{date:tod(),notes:""}});
+}
+function submitQuickNote(){
+  var pid=S.activePlantId;if(!pid)return;
+  var p=D.plants.find(function(x){return x.id===pid;});if(!p)return;
+  var date=(document.getElementById("qn-date")||{}).value||tod();
+  var notes=(document.getElementById("qn-notes")||{}).value||"";
+  if(!D.logs[pid])D.logs[pid]=[];
+  D.logs[pid].push({id:uid(),date:date,height:"",watered:false,fed:false,notes:notes||"Trim / maintenance"});
+  saveD(D);patch({showQuickNote:false});showToast("✂️ Logged for "+p.name);
+}
+
+function openEditPlant(pid){
+  var p=D.plants.find(function(x){return x.id===pid;});
+  if(!p)return;
+  patch({showEditPlant:true,editingPlantId:pid});
+}
+
+function submitEditPlant(){
+  var pid=S.editingPlantId;var p=D.plants.find(function(x){return x.id===pid;});if(!p)return;
+  p.name=(document.getElementById("ep-name")||{}).value||p.name;
+  p.strain=(document.getElementById("ep-strain")||{}).value||p.strain;
+  p.startDate=(document.getElementById("ep-date")||{}).value||p.startDate;
+  p.totalDays=(document.getElementById("ep-days")||{}).value||p.totalDays;
+  p.harvestDate=(document.getElementById("ep-harvest")||{}).value||p.harvestDate;
+  p.position=(document.getElementById("ep-position")||{}).value||"";
+  p.isPerpetual=(document.getElementById("ep-perpetual")&&document.getElementById("ep-perpetual").checked)||(D.setup.perpetualZones||[]).indexOf(p.position)>-1;
+  saveD(D);patch({showEditPlant:false,editingPlantId:null});showToast("Plant updated!");
+}
+
 function deletePlant(pid){
   D.plants=D.plants.filter(function(p){return p.id!==pid;});
   delete D.logs[pid];
@@ -646,7 +1206,7 @@ function deletePlant(pid){
 }
 
 function savePerp(){
-  D.setup.harvestGap=(document.getElementById("p-gap")||{}).value||"35";
+  D.setup.numSlots=(document.getElementById("p-slots")||{}).value||"1";
   D.setup.avgFlowerDays=(document.getElementById("p-days")||{}).value||"77";
   saveD(D);render();showToast("Perpetual settings saved!");
 }
