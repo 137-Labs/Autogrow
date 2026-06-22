@@ -53,6 +53,11 @@ input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none}
 .mbg{position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:1000;display:flex;align-items:flex-end;justify-content:center;backdrop-filter:blur(4px)}
 .modal{background:var(--bg2);border:1.5px solid var(--border2);border-radius:22px 22px 0 0;padding:20px 18px 36px;width:100%;max-width:480px;max-height:90vh;overflow-y:auto}
 .modal-handle{width:32px;height:3px;background:var(--border2);border-radius:2px;margin:0 auto 18px}
+.chip{display:flex;align-items:center;gap:10px;font-size:13px;border-radius:10px;padding:10px 12px;margin-bottom:6px;cursor:pointer;user-select:none;background:var(--bg3);border:1.5px solid var(--border2);color:var(--text2)}
+.chip.on{background:rgba(74,222,128,0.13);border-color:#4ade80;color:var(--green)}
+.chip input[type=checkbox]{width:20px;height:20px;flex-shrink:0;accent-color:var(--green);pointer-events:none}
+.chip-btn{width:100%;text-align:left;border-radius:10px;padding:10px 12px;margin-bottom:10px;cursor:pointer;font-size:13px;font-weight:600;background:var(--bg3);border:1.5px solid var(--border2);color:var(--text2)}
+.chip-btn.on{background:rgba(74,222,128,0.13);border-color:#4ade80;color:var(--green)}
 
 /* Toast */
 .toast{position:fixed;top:20px;left:50%;transform:translateX(-50%);background:var(--green);color:#071007;padding:10px 20px;border-radius:100px;font-size:13px;font-weight:600;z-index:9999;display:none;white-space:nowrap}
@@ -985,7 +990,7 @@ function tabNutrients(){
   h+='<div style="display:flex;gap:8px;margin-bottom:12px">';
   Object.keys(NUTRIENT_BRANDS).forEach(function(bk){
     var active=brandKey===bk;
-    h+='<button onclick="setNutrientBrand(\''+bk+'\')" style="flex:1;background:'+(active?"var(--green)15":"var(--bg2)")+';border:1.5px solid '+(active?"var(--green)":"var(--border)")+';border-radius:10px;padding:10px 6px;color:'+(active?"var(--green)":"var(--text2)")+';font-size:12px;font-weight:600;cursor:pointer">'+esc(NUTRIENT_BRANDS[bk].label)+'</button>';
+    h+='<button onclick="setNutrientBrand(\''+bk+'\')" class="chip-btn'+(active?" on":"")+'" style="flex:1;margin-bottom:0;text-align:center">'+esc(NUTRIENT_BRANDS[bk].label)+'</button>';
   });
   h+='</div>';
 
@@ -1009,13 +1014,13 @@ function tabNutrients(){
     // Starter pack toggle + individual bottle checkboxes
     var isStarterPack=JSON.stringify((selected||[]).slice().sort())===JSON.stringify((brand.starterPackBottles||[]).slice().sort());
     h+='<div style="background:var(--bg2);border:1.5px solid var(--border);border-radius:12px;padding:12px;margin-bottom:14px">';
-    h+='<button onclick="useStarterPack(\''+brandKey+'\')" style="width:100%;text-align:left;background:'+(isStarterPack?"#4ade8015":"var(--bg3)")+';border:1.5px solid '+(isStarterPack?"#4ade80":"var(--border2)")+';border-radius:10px;padding:10px 12px;margin-bottom:10px;cursor:pointer;color:'+(isStarterPack?"var(--green)":"var(--text2)")+';font-size:13px;font-weight:600">📦 Use Starter Pack — '+(brand.starterPackBottles||[]).map(function(bk){return brand.bottles[bk].name;}).join(" + ")+'</button>';
+    h+='<button onclick="useStarterPack(\''+brandKey+'\')" class="chip-btn'+(isStarterPack?" on":"")+'">📦 Use Starter Pack — '+(brand.starterPackBottles||[]).map(function(bk){return brand.bottles[bk].name;}).join(" + ")+'</button>';
     h+='<div style="font-size:11px;color:var(--text3);margin-bottom:8px">Or pick individual bottles you own:</div>';
     Object.keys(brand.bottles).forEach(function(bk){
       var bottle=brand.bottles[bk];
       var checked=selected.indexOf(bk)>-1;
       var isAddon=bottle.role.indexOf("addon")===0;
-      h+='<label onclick="event.stopPropagation();toggleNutrientBottle(\''+bk+'\')" style="display:flex;align-items:center;gap:10px;font-size:13px;color:'+(checked?"var(--green)":"var(--text2)")+';background:'+(checked?"#4ade8015":"var(--bg3)")+';border:1.5px solid '+(checked?"#4ade80":"var(--border2)")+';border-radius:10px;padding:9px 12px;margin-bottom:6px;cursor:pointer;user-select:none"><input type="checkbox" '+(checked?"checked":"")+' style="width:18px;height:18px;flex-shrink:0;accent-color:var(--green);pointer-events:none"/> '+esc(bottle.name)+(isAddon?' <span style="color:var(--text3);font-size:11px;margin-left:4px">(add-on)</span>':'')+'</label>';
+      h+='<label onclick="event.stopPropagation();toggleNutrientBottle(\''+bk+'\')" class="chip'+(checked?" on":"")+'"><input type="checkbox" '+(checked?"checked":"")+'/> '+esc(bottle.name)+(isAddon?' <span style="color:var(--text3);font-size:11px;margin-left:4px">(add-on)</span>':'')+'</label>';
     });
     h+='</div>';
   }
@@ -1178,9 +1183,9 @@ function modalAddPlant(){
     '<option value="">— Unassigned —</option>'+
     getTentZones().map(function(z){return '<option value="'+z.key+'" '+(S.newPlant.position===z.key?"selected":"")+'>'+z.label+'</option>';}).join("")+
     '</select></div>';
-  h+='<label onclick="event.stopPropagation();var el=document.getElementById(\'ap-perpetual\');el.checked=!el.checked;patch({newPlant:Object.assign({},S.newPlant,{isPerpetual:el.checked})});" style="display:flex;align-items:center;gap:10px;font-size:13px;color:'+(S.newPlant.isPerpetual?"var(--green)":"var(--text2)")+';background:'+(S.newPlant.isPerpetual?"#4ade8015":"var(--bg3)")+';border:1.5px solid '+(S.newPlant.isPerpetual?"#4ade80":"var(--border2)")+';border-radius:10px;padding:10px 12px;cursor:pointer;user-select:none"><input id="ap-perpetual" type="checkbox" '+(S.newPlant.isPerpetual?"checked":"")+' style="width:20px;height:20px;flex-shrink:0;accent-color:var(--green);pointer-events:none"/> Part of Perpetual Harvest rotation</label>';
-  h+='<label onclick="event.stopPropagation();var el=document.getElementById(\'ap-cutting\');el.checked=!el.checked;patch({newPlant:Object.assign({},S.newPlant,{isCutting:el.checked})});" style="display:flex;align-items:center;gap:10px;font-size:13px;color:'+(S.newPlant.isCutting?"var(--green)":"var(--text2)")+';background:'+(S.newPlant.isCutting?"#4ade8015":"var(--bg3)")+';border:1.5px solid '+(S.newPlant.isCutting?"#4ade80":"var(--border2)")+';border-radius:10px;padding:10px 12px;cursor:pointer;user-select:none"><input id="ap-cutting" type="checkbox" '+(S.newPlant.isCutting?"checked":"")+' style="width:20px;height:20px;flex-shrink:0;accent-color:var(--green);pointer-events:none"/> This is a cutting/clone (not grown from seed)</label>';
-  h+='<label onclick="event.stopPropagation();var el=document.getElementById(\'ap-static\');el.checked=!el.checked;patch({newPlant:Object.assign({},S.newPlant,{isStatic:el.checked})});" style="display:flex;align-items:center;gap:10px;font-size:13px;color:'+(S.newPlant.isStatic?"var(--green)":"var(--text2)")+';background:'+(S.newPlant.isStatic?"#4ade8015":"var(--bg3)")+';border:1.5px solid '+(S.newPlant.isStatic?"#4ade80":"var(--border2)")+';border-radius:10px;padding:10px 12px;cursor:pointer;user-select:none"><input id="ap-static" type="checkbox" '+(S.newPlant.isStatic?"checked":"")+' style="width:20px;height:20px;flex-shrink:0;accent-color:var(--green);pointer-events:none"/> Static / forever-fruiting plant (no harvest cycle, lives in the tent)</label>';
+  h+='<label onclick="event.stopPropagation();var el=document.getElementById(\'ap-perpetual\');el.checked=!el.checked;patch({newPlant:Object.assign({},S.newPlant,{isPerpetual:el.checked})});" class="chip'+(S.newPlant.isPerpetual?" on":"")+'"><input id="ap-perpetual" type="checkbox" '+(S.newPlant.isPerpetual?"checked":"")+'/> Part of Perpetual Harvest rotation</label>';
+  h+='<label onclick="event.stopPropagation();var el=document.getElementById(\'ap-cutting\');el.checked=!el.checked;patch({newPlant:Object.assign({},S.newPlant,{isCutting:el.checked})});" class="chip'+(S.newPlant.isCutting?" on":"")+'"><input id="ap-cutting" type="checkbox" '+(S.newPlant.isCutting?"checked":"")+'/> This is a cutting/clone (not grown from seed)</label>';
+  h+='<label onclick="event.stopPropagation();var el=document.getElementById(\'ap-static\');el.checked=!el.checked;patch({newPlant:Object.assign({},S.newPlant,{isStatic:el.checked})});" class="chip'+(S.newPlant.isStatic?" on":"")+'"><input id="ap-static" type="checkbox" '+(S.newPlant.isStatic?"checked":"")+'/> Static / forever-fruiting plant (no harvest cycle, lives in the tent)</label>';
   h+='<div><div class="lbl">Notes (optional)</div><textarea id="ap-notes" class="inp" rows="2" placeholder="Anything you want to remember..." style="resize:none">'+esc(S.newPlant.notes)+'</textarea></div>';
   h+='<button onclick="submitAddPlant()" class="btn btn-green" style="width:100%">Start Growing 🌱</button>';
   h+='<button onclick="patch({showAddPlant:false})" class="btn btn-outline" style="width:100%">Cancel</button>';
@@ -1208,9 +1213,9 @@ function modalEditPlant(){
     '<option value="">— Unassigned —</option>'+
     getTentZones().map(function(z){return '<option value="'+z.key+'" '+((p.position||"")===z.key?"selected":"")+'>'+z.label+'</option>';}).join("")+
     '</select></div>';
-  h+='<label onclick="event.stopPropagation();var el=document.getElementById(\'ep-perpetual\');el.checked=!el.checked;this.style.borderColor=el.checked?\'#4ade80\':\'var(--border2)\';this.style.background=el.checked?\'#4ade8015\':\'var(--bg3)\';this.style.color=el.checked?\'var(--green)\':\'var(--text2)\';" style="display:flex;align-items:center;gap:10px;font-size:13px;color:'+(p.isPerpetual?"var(--green)":"var(--text2)")+';background:'+(p.isPerpetual?"#4ade8015":"var(--bg3)")+';border:1.5px solid '+(p.isPerpetual?"#4ade80":"var(--border2)")+';border-radius:10px;padding:10px 12px;cursor:pointer;user-select:none"><input id="ep-perpetual" type="checkbox" '+(p.isPerpetual?"checked":"")+' style="width:20px;height:20px;flex-shrink:0;accent-color:var(--green);pointer-events:none"/> Part of Perpetual Harvest rotation</label>';
-  h+='<label onclick="event.stopPropagation();var el=document.getElementById(\'ep-cutting\');el.checked=!el.checked;this.style.borderColor=el.checked?\'#4ade80\':\'var(--border2)\';this.style.background=el.checked?\'#4ade8015\':\'var(--bg3)\';this.style.color=el.checked?\'var(--green)\':\'var(--text2)\';" style="display:flex;align-items:center;gap:10px;font-size:13px;color:'+(p.isCutting?"var(--green)":"var(--text2)")+';background:'+(p.isCutting?"#4ade8015":"var(--bg3)")+';border:1.5px solid '+(p.isCutting?"#4ade80":"var(--border2)")+';border-radius:10px;padding:10px 12px;cursor:pointer;user-select:none"><input id="ep-cutting" type="checkbox" '+(p.isCutting?"checked":"")+' style="width:20px;height:20px;flex-shrink:0;accent-color:var(--green);pointer-events:none"/> This is a cutting/clone (not grown from seed)</label>';
-  h+='<label onclick="event.stopPropagation();var el=document.getElementById(\'ep-static\');el.checked=!el.checked;this.style.borderColor=el.checked?\'#4ade80\':\'var(--border2)\';this.style.background=el.checked?\'#4ade8015\':\'var(--bg3)\';this.style.color=el.checked?\'var(--green)\':\'var(--text2)\';" style="display:flex;align-items:center;gap:10px;font-size:13px;color:'+(p.isStatic?"var(--green)":"var(--text2)")+';background:'+(p.isStatic?"#4ade8015":"var(--bg3)")+';border:1.5px solid '+(p.isStatic?"#4ade80":"var(--border2)")+';border-radius:10px;padding:10px 12px;cursor:pointer;user-select:none"><input id="ep-static" type="checkbox" '+(p.isStatic?"checked":"")+' style="width:20px;height:20px;flex-shrink:0;accent-color:var(--green);pointer-events:none"/> Static / forever-fruiting plant (no harvest cycle, lives in the tent)</label>';
+  h+='<label onclick="event.stopPropagation();var pl=D.plants.find(function(x){return x.id===S.editingPlantId;});if(pl){pl.isPerpetual=!pl.isPerpetual;render();}" class="chip'+(p.isPerpetual?" on":"")+'"><input id="ep-perpetual" type="checkbox" '+(p.isPerpetual?"checked":"")+'/> Part of Perpetual Harvest rotation</label>';
+  h+='<label onclick="event.stopPropagation();var pl=D.plants.find(function(x){return x.id===S.editingPlantId;});if(pl){pl.isCutting=!pl.isCutting;render();}" class="chip'+(p.isCutting?" on":"")+'"><input id="ep-cutting" type="checkbox" '+(p.isCutting?"checked":"")+'/> This is a cutting/clone (not grown from seed)</label>';
+  h+='<label onclick="event.stopPropagation();var pl=D.plants.find(function(x){return x.id===S.editingPlantId;});if(pl){pl.isStatic=!pl.isStatic;render();}" class="chip'+(p.isStatic?" on":"")+'"><input id="ep-static" type="checkbox" '+(p.isStatic?"checked":"")+'/> Static / forever-fruiting plant (no harvest cycle, lives in the tent)</label>';
   h+='<button onclick="submitEditPlant()" class="btn btn-green" style="width:100%">Save Changes</button>';
   h+='<button onclick="patch({showEditPlant:false})" class="btn btn-outline" style="width:100%">Cancel</button>';
   h+='</div></div></div>';
@@ -1612,9 +1617,7 @@ function submitEditPlant(){
   p.totalDays=(document.getElementById("ep-days")||{}).value||p.totalDays;
   p.harvestDate=(document.getElementById("ep-harvest")||{}).value||p.harvestDate;
   p.position=(document.getElementById("ep-position")||{}).value||"";
-  p.isPerpetual=(document.getElementById("ep-perpetual")&&document.getElementById("ep-perpetual").checked)||(D.setup.perpetualZones||[]).indexOf(p.position)>-1;
-  p.isCutting=document.getElementById("ep-cutting")&&document.getElementById("ep-cutting").checked;
-  p.isStatic=document.getElementById("ep-static")&&document.getElementById("ep-static").checked;
+  p.isPerpetual=p.isPerpetual||(D.setup.perpetualZones||[]).indexOf(p.position)>-1;
   saveD(D);patch({showEditPlant:false,editingPlantId:null});showToast("Plant updated!");
 }
 
