@@ -195,7 +195,7 @@ function getWeeklyTips(days,setup){
 var NUTRIENT_BRANDS={
   canna_terra:{
     label:"CANNA Terra",
-    starterPackBottles:["terra_vega","terra_flores"],
+    starterPackBottles:["terra_vega","terra_flores","rhizotonic","cannazym","boost","pk1314"],
     bottles:{
       terra_vega:{name:"Terra Vega",role:"base-veg",unit:"ml/L",
         dose:{rooting:0,veg:[1.5,3,5.5],transition:5.5,flower:0,lateFlower:0,flush:0}},
@@ -206,9 +206,9 @@ var NUTRIENT_BRANDS={
       cannazym:{name:"Cannazym",role:"addon-enzyme",unit:"ml/L",
         dose:{rooting:0,veg:2.5,transition:2.5,flower:2.5,lateFlower:2.5,flush:0}},
       boost:{name:"Boost Accelerator",role:"addon-bloom",unit:"ml/L",
-        dose:{rooting:0,veg:0,transition:2,flower:2,lateFlower:4,flush:0}},
+        dose:{rooting:0,veg:0,transition:0.4,flower:0.4,lateFlower:0.4,flush:0}},
       pk1314:{name:"PK 13/14",role:"addon-pk",unit:"ml/L",
-        dose:{rooting:0,veg:0,transition:0,flower:0,lateFlower:2,flush:0}},
+        dose:{rooting:0,veg:0,transition:0,flower:0,lateFlower:1.5,flush:0}},
       calmag:{name:"CalMag",role:"addon-calmag",unit:"ml/L",
         dose:{rooting:0.5,veg:1,transition:1,flower:1,lateFlower:1,flush:0}}
     }
@@ -275,23 +275,29 @@ function resolveDose(doseVal,phaseProgress){
 }
 
 // ── Build the actual feed plan for a plant using whichever bottles the user has selected ──
+function getNutrientStrengthMultiplier(plant){
+  if((plant.plantType||"cannabis")!=="cannabis")return 1;
+  // Autoflowers need roughly 25-50% of photoperiod nutrient strength; 50% is the safe default,
+  // most growers start here and increase only if the plant shows deficiency signs.
+  if((plant.flowerType||"auto")==="auto")return 0.5;
+  return 1; // photoperiod gets full strength
+}
+
 function getRealFeedPlan(plant,days,stage){
-  var cfg=D.setup.nutrients||{};
-  var brandKey=cfg.brand||"canna_terra";
-  var brand=NUTRIENT_BRANDS[brandKey];
-  if(!brand)return null;
-  var selectedBottles=cfg.bottles&&cfg.bottles.length?cfg.bottles:(brand.starterPackBottles||[]);
+  var pantry=D.pantry||[];
+  if(!pantry.length)return null;
   var phase=getNutrientPhase(plant,days,stage);
-  // crude phase progress estimate (0-1) based on days within stage — good enough for ramping doses
   var phaseProgress=Math.min(1,((days%14)/14));
-  var bottleDoses=selectedBottles.map(function(bk){
-    var bottle=(brandKey==="custom"?(cfg.customBottles||{})[bk]:brand.bottles[bk]);
-    if(!bottle)return null;
-    var doseVal=bottle.dose?bottle.dose[phase]:0;
-    var ml=resolveDose(doseVal,phaseProgress);
-    return{key:bk,name:bottle.name,mlPerL:Math.round(ml*10)/10};
-  }).filter(Boolean).filter(function(b){return b.mlPerL>0;});
-  return{brandLabel:brand.label,phase:phase,bottles:bottleDoses};
+  var strengthMult=getNutrientStrengthMultiplier(plant);
+  var bottleDoses=pantry.map(function(item){
+    var dose=item.dose?item.dose[phase]:0;
+    var ml=resolveDose(dose,phaseProgress)*strengthMult;
+    ml=Math.round(ml*10)/10;
+    if(ml<=0)return null;
+    return{pantryId:item.id,name:item.name,brandKey:item.brandKey,bottleKey:item.bottleKey,mlPerL:ml,remainingMl:item.remainingMl,sizeMl:item.sizeMl};
+  }).filter(Boolean);
+  var brandLabels=Array.from(new Set(pantry.map(function(i){return NUTRIENT_BRANDS[i.brandKey]?NUTRIENT_BRANDS[i.brandKey].label:i.brandKey;})));
+  return{brandLabel:brandLabels.join(" + "),phase:phase,bottles:bottleDoses,strengthMult:strengthMult};
 }
 
 var TERRA_CANNA=[
@@ -367,11 +373,12 @@ function getFeedPlanFor(plant,days){
       isRealProduct:true,
       brandLabel:real.brandLabel,
       bottles:real.bottles,
+      strengthMult:real.strengthMult,
       note:real.bottles.map(function(b){return b.name+" "+b.mlPerL+"ml/L";}).join(", ")||"Water only this week"
     };
   }
   if(real){
-    return{week:Math.floor(days/7)+1,stage:stage.name,isRealProduct:true,brandLabel:real.brandLabel,bottles:[],note:"Water only this week"};
+    return{week:Math.floor(days/7)+1,stage:stage.name,isRealProduct:true,brandLabel:real.brandLabel,bottles:[],strengthMult:real.strengthMult,note:"Water only this week"};
   }
   // fallback to legacy abstract charts if no nutrient config set
   var type=plant.plantType||"cannabis";
@@ -605,6 +612,7 @@ function getZoneRotation(){
 // ── Default data ─────────────────────────────────────────
 var D=loadD()||{
   plants:[],
+  pantry:[],
   setup:{
     tentSize:"70x70",lightModel:"Mars Hydro FC1500",lightWatts:"150",
     lightSchedule:"18/6",medium:"soil",potSize:"11",phing:false,
@@ -623,12 +631,7 @@ if(!D.setup.canopyMax)D.setup.canopyMax="90";
 if(!D.setup.zoneLayout)D.setup.zoneLayout="5z_ushape";
 if(!D.setup.numZones)D.setup.numZones=String(TENT_ZONES_PRESETS["5z_ushape"].length);
 if(!D.setup.perpetualZones)D.setup.perpetualZones=[];
-if(!D.setup.nutrients)D.setup.nutrients={brand:"canna_terra",bottles:[],customBottles:{}};
-if(!D.setup.nutrients.customBottles)D.setup.nutrients.customBottles={};
-if(!D.setup.nutrients.bottles||!D.setup.nutrients.bottles.length){
-  var _initBrand=NUTRIENT_BRANDS[D.setup.nutrients.brand||"canna_terra"];
-  D.setup.nutrients.bottles=(_initBrand&&_initBrand.starterPackBottles||[]).slice();
-}
+if(!D.pantry)D.pantry=[];
 
 var S={
   tab:"plants",
@@ -639,11 +642,12 @@ var S={
   activePlantId:null,
   showNutrients:false,
   editingPlantId:null,
-  newPlant:{name:"",strain:"",plantType:"cannabis",startDate:tod(),totalDays:"77",harvestDate:addDays(tod(),77),notes:"",position:"",isPerpetual:false,isCutting:false},
+  newPlant:{name:"",strain:"",plantType:"cannabis",flowerType:"auto",startDate:tod(),totalDays:"77",harvestDate:addDays(tod(),77),notes:"",position:"",isPerpetual:false,isCutting:false},
   newLog:{date:tod(),height:"",notes:"",watered:false,fed:false},
   newFeed:{date:tod(),nutrients:[{name:"",mlPerL:""}],waterAmount:"",notes:""},
   newQuickNote:{date:tod(),notes:""},
-  showFeed:false,showQuickNote:false,showTentConfig:false,
+  showFeed:false,showQuickNote:false,showTentConfig:false,showAddPantry:false,showEditPantry:false,editingPantryId:null,
+  pantryForm:{mode:"pack",brand:"canna_terra",bottle:"",sizeMl:1000,fillPct:100,customName:"",customMl:""},
   advisorLoading:false,advisorText:"",showAdvisor:false,
   selectedZone:"backCenter"
 };
@@ -690,6 +694,8 @@ function buildApp(){
   if(S.showFeed)h+=modalFeed();
   if(S.showQuickNote)h+=modalQuickNote();
   if(S.showTentConfig)h+=modalTentConfig();
+  if(S.showAddPantry)h+=modalAddPantry();
+  if(S.showEditPantry)h+=modalEditPantry();
   if(S.showAdvisor)h+=modalAdvisor();
   return h;
 }
@@ -884,7 +890,7 @@ function tabMap(){
     h+=infoCell("🧪","Suggested","Wk"+tc.week+" "+(tc.isRealProduct?(tc.bottles.length?tc.bottles.length+" bottle"+(tc.bottles.length>1?"s":""):"Water only"):tc.note));
     h+='</div>';
     h+='<div style="background:var(--bg3);border-radius:10px;padding:10px;margin-bottom:8px">';
-    h+='<div style="font-size:10px;color:var(--text3);font-family:\'DM Mono\',monospace;margin-bottom:4px">'+(tc.isRealProduct?esc(tc.brandLabel).toUpperCase()+" — THIS WEEK":"SUGGESTED MIX (per L, this week)")+'</div>';
+    h+='<div style="font-size:10px;color:var(--text3);font-family:\'DM Mono\',monospace;margin-bottom:4px">'+(tc.isRealProduct?esc(tc.brandLabel).toUpperCase()+" — THIS WEEK"+(tc.strengthMult&&tc.strengthMult<1?" · "+Math.round(tc.strengthMult*100)+"% strength (auto)":""):"SUGGESTED MIX (per L, this week)")+'</div>';
     if(tc.isRealProduct){
       h+='<div style="font-size:12px;color:var(--text2)">'+(tc.bottles.length?tc.bottles.map(function(b){return esc(b.name)+" "+b.mlPerL+"ml/L";}).join(" · "):"Water only — no feeding this week")+'</div>';
     }else{
@@ -981,58 +987,35 @@ function tabToday(){
 
 // ── NUTRIENTS TAB ────────────────────────────────────────
 function tabNutrients(){
-  var cfg=D.setup.nutrients||{brand:"canna_terra",bottles:[]};
-  if(!cfg.bottles)cfg.bottles=[];
-  var brandKey=cfg.brand||"canna_terra";
-  var brand=NUTRIENT_BRANDS[brandKey];
-  var selected=cfg.bottles; // real saved state only — no fallback substitution
-
-  var h='<div style="margin-bottom:14px">';
-  h+='<div style="font-size:15px;font-weight:700;color:var(--text);margin-bottom:4px">Nutrient Setup</div>';
-  h+='<div style="font-size:12px;color:var(--text3)">Pick your line and which bottles you actually have — doses below update to match.</div></div>';
-
-  // Brand selector
-  h+='<div style="display:flex;gap:8px;margin-bottom:12px">';
-  Object.keys(NUTRIENT_BRANDS).forEach(function(bk){
-    var active=brandKey===bk;
-    h+='<button onclick="setNutrientBrand(\''+bk+'\')" class="chip-btn'+(active?" on":"")+'" style="flex:1;margin-bottom:0;text-align:center">'+esc(NUTRIENT_BRANDS[bk].label)+'</button>';
-  });
+  var h='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">';
+  h+='<div><div style="font-size:15px;font-weight:700;color:var(--text)">🧪 Nutrient Pantry</div><div style="font-size:12px;color:var(--text3)">Bottles you actually own — doses below use only these</div></div>';
+  h+='<button onclick="patch({showAddPantry:true})" style="background:var(--green);color:#071007;border:none;border-radius:10px;padding:9px 14px;font-size:13px;font-weight:700;cursor:pointer;white-space:nowrap">+ Add</button>';
   h+='</div>';
 
-  if(brandKey==="custom"){
-    h+='<div style="background:var(--bg2);border:1.5px solid var(--border);border-radius:12px;padding:12px;margin-bottom:14px">';
-    h+='<div style="font-size:12px;color:var(--text3);margin-bottom:10px">Add your own bottles. Doses are flat (your input) applied every feed — adjust manually as your plant grows.</div>';
-    var customBottles=cfg.customBottles||{};
-    Object.keys(customBottles).forEach(function(bk){
-      h+='<div style="display:flex;justify-content:space-between;align-items:center;background:var(--bg3);border-radius:8px;padding:8px 10px;margin-bottom:6px">';
-      h+='<span style="font-size:13px;color:var(--text)">'+esc(customBottles[bk].name)+' — '+customBottles[bk].dose.veg+'ml/L</span>';
-      h+='<button onclick="removeCustomBottle(\''+bk+'\')" style="background:none;border:none;color:var(--text3);font-size:16px;cursor:pointer">×</button>';
-      h+='</div>';
-    });
-    h+='<div style="display:flex;gap:6px;margin-top:8px">';
-    h+='<input id="custom-bottle-name" class="inp" placeholder="Bottle name" style="flex:2"/>';
-    h+='<input id="custom-bottle-ml" type="number" step="0.1" class="inp" placeholder="ml/L" style="flex:1"/>';
-    h+='</div>';
-    h+='<button onclick="addCustomBottle()" style="width:100%;margin-top:8px;background:none;border:1px dashed var(--border2);border-radius:8px;padding:8px;font-size:12px;color:var(--text3);cursor:pointer">+ Add bottle</button>';
+  if(!D.pantry.length){
+    h+='<div style="text-align:center;padding:32px 16px;color:var(--text3);background:var(--bg2);border:1.5px solid var(--border);border-radius:14px;margin-bottom:16px">';
+    h+='<div style="font-size:32px;margin-bottom:8px">🗄️</div>';
+    h+='<div style="font-size:13px">Pantry is empty — add a starter pack or individual bottle to get dosing suggestions.</div>';
     h+='</div>';
   }else{
-    // Starter pack toggle + individual bottle checkboxes
-    var isStarterPack=JSON.stringify((selected||[]).slice().sort())===JSON.stringify((brand.starterPackBottles||[]).slice().sort());
-    h+='<div style="background:var(--bg2);border:1.5px solid var(--border);border-radius:12px;padding:12px;margin-bottom:14px">';
-    h+='<button onclick="useStarterPack(\''+brandKey+'\')" class="chip-btn'+(isStarterPack?" on":"")+'">📦 Use Starter Pack — '+(brand.starterPackBottles||[]).map(function(bk){return brand.bottles[bk].name;}).join(" + ")+'</button>';
-    h+='<div style="font-size:11px;color:var(--text3);margin-bottom:8px">Or pick individual bottles you own:</div>';
-    Object.keys(brand.bottles).forEach(function(bk){
-      var bottle=brand.bottles[bk];
-      var checked=selected.indexOf(bk)>-1;
-      var isAddon=bottle.role.indexOf("addon")===0;
-      h+='<label onclick="event.stopPropagation();toggleNutrientBottle(\''+bk+'\')" class="chip'+(checked?" on":"")+'"><input type="checkbox" '+(checked?"checked":"")+'/> '+esc(bottle.name)+(isAddon?' <span style="color:var(--text3);font-size:11px;margin-left:4px">(add-on)</span>':'')+'</label>';
+    D.pantry.forEach(function(item){
+      var pct=pantryPct(item);
+      var barColor=pct>50?"#4ade80":pct>20?"#facc15":"#f87171";
+      h+='<div onclick="openEditPantry(\''+item.id+'\')" style="background:var(--bg2);border:1.5px solid var(--border);border-radius:12px;padding:12px 14px;margin-bottom:8px;cursor:pointer">';
+      h+='<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px">';
+      h+='<div><div style="font-size:14px;font-weight:700;color:var(--text)">'+esc(item.name)+' <span style="font-size:11px;color:var(--text3);font-weight:400">✏️</span></div>';
+      h+='<div style="font-size:11px;color:var(--text3);font-family:\'DM Mono\',monospace">'+esc(NUTRIENT_BRANDS[item.brandKey]?NUTRIENT_BRANDS[item.brandKey].label:"Custom")+'</div></div>';
+      h+='<button data-pid="'+item.id+'" onclick="event.stopPropagation();removePantryBottle(this.dataset.pid)" style="background:none;border:none;color:var(--text3);font-size:18px;cursor:pointer;padding:0 4px">×</button>';
+      h+='</div>';
+      h+='<div class="pt" style="height:7px;margin-bottom:4px"><div class="pb" style="width:'+pct+'%;background:'+barColor+';height:7px"></div></div>';
+      h+='<div style="display:flex;justify-content:space-between;font-size:11px;color:var(--text3);font-family:\'DM Mono\',monospace"><span>'+item.remainingMl+'ml left</span><span>'+pct+'% of '+item.sizeMl+'ml</span></div>';
+      h+='</div>';
     });
-    h+='</div>';
   }
 
-  // Per-plant weekly preview using real selected bottles
+  // Per-plant weekly preview using pantry
   if(D.plants.length>0){
-    h+='<div style="font-size:13px;font-weight:700;color:var(--text);margin:16px 0 8px">This Week — Per Plant</div>';
+    h+='<div style="font-size:13px;font-weight:700;color:var(--text);margin:18px 0 8px">This Week — Per Plant</div>';
     D.plants.filter(function(p){return !p.harvested;}).forEach(function(p){
       var days=daysSince(p.startDate);
       var tc=getFeedPlanFor(p,days);
@@ -1179,6 +1162,13 @@ function modalAddPlant(){
     PLANT_TYPES.map(function(t){return '<option value="'+t.key+'" '+((S.newPlant.plantType||"cannabis")===t.key?"selected":"")+'>'+t.label+'</option>';}).join("")+
     '</select></div>';
   h+='<div style="font-size:11px;color:var(--text3);background:var(--bg3);border-radius:8px;padding:8px 10px">'+esc(plantTypeMeta(S.newPlant.plantType||"cannabis").desc)+'</div>';
+  if(S.newPlant.plantType==="cannabis"||!S.newPlant.plantType){
+    h+='<div><div class="lbl">Flowering Type</div><div style="display:flex;gap:8px">';
+    h+='<button onclick="patch({newPlant:Object.assign({},S.newPlant,{flowerType:\'auto\'})})" class="chip-btn'+((S.newPlant.flowerType||"auto")==="auto"?" on":"")+'" style="flex:1;margin-bottom:0;text-align:center">🌾 Autoflower</button>';
+    h+='<button onclick="patch({newPlant:Object.assign({},S.newPlant,{flowerType:\'photo\'})})" class="chip-btn'+(S.newPlant.flowerType==="photo"?" on":"")+'" style="flex:1;margin-bottom:0;text-align:center">💡 Photoperiod</button>';
+    h+='</div>';
+    h+='<div style="font-size:11px;color:var(--text3);margin-top:4px">'+((S.newPlant.flowerType||"auto")==="auto"?"Autoflowers need about half the nutrient strength of photoperiod plants — doses below are auto-reduced.":"Photoperiod plants get full-strength doses and need a 12/12 light flip to start flowering.")+'</div></div>';
+  }
   h+=(S.newPlant.plantType==="cannabis"||!S.newPlant.plantType)?('<div><div class="lbl">Strain</div><select id="ap-strain" class="inp" onchange="onStrainPick()"><option value="">— Select RQS strain —</option>'+RQS_STRAINS.map(function(s){return '<option value="'+esc(s.name)+'" '+(S.newPlant.strain===s.name?"selected":"")+'>'+esc(s.name)+' ('+s.days+'d)</option>';}).join("")+'</select></div>'):'';
   h+='<div><div class="lbl">'+(S.newPlant.plantType==="cannabis"||!S.newPlant.plantType?"Strain name (editable / custom)":"Variety (e.g. Purple Basil, Yellow Cherry Tomato)")+'</div><input id="ap-strain-name" class="inp" placeholder="e.g. Royal Dwarf" value="'+esc(S.newPlant.strain)+'"/></div>';
   h+='<div><div class="lbl">Start Date (seed in ground)</div><input id="ap-date" type="date" class="inp" value="'+S.newPlant.startDate+'" onchange="onDateOrDaysChange()"/></div>';
@@ -1210,6 +1200,12 @@ function modalEditPlant(){
     PLANT_TYPES.map(function(t){return '<option value="'+t.key+'" '+((p.plantType||"cannabis")===t.key?"selected":"")+'>'+t.label+'</option>';}).join("")+
     '</select></div>';
   h+='<div style="font-size:11px;color:var(--text3);background:var(--bg3);border-radius:8px;padding:8px 10px">'+esc(plantTypeMeta(p.plantType||"cannabis").desc)+'</div>';
+  if((p.plantType||"cannabis")==="cannabis"){
+    h+='<div><div class="lbl">Flowering Type</div><div style="display:flex;gap:8px">';
+    h+='<button onclick="var pl=D.plants.find(function(x){return x.id===S.editingPlantId;});if(pl){pl.flowerType=\'auto\';render();}" class="chip-btn'+((p.flowerType||"auto")==="auto"?" on":"")+'" style="flex:1;margin-bottom:0;text-align:center">🌾 Autoflower</button>';
+    h+='<button onclick="var pl=D.plants.find(function(x){return x.id===S.editingPlantId;});if(pl){pl.flowerType=\'photo\';render();}" class="chip-btn'+(p.flowerType==="photo"?" on":"")+'" style="flex:1;margin-bottom:0;text-align:center">💡 Photoperiod</button>';
+    h+='</div></div>';
+  }
   h+='<div><div class="lbl">Strain / Variety</div><input id="ep-strain" class="inp" value="'+esc(p.strain)+'"/></div>';
   h+='<div><div class="lbl">Start Date</div><input id="ep-date" type="date" class="inp" value="'+p.startDate+'" onchange="onEpDateOrDays()"/></div>';
   h+='<div><div class="lbl">Total Days</div><input id="ep-days" type="number" class="inp" value="'+(p.totalDays||plantTotalDays(p))+'" onchange="onEpDateOrDays()"/></div>';
@@ -1285,10 +1281,14 @@ function modalFeed(){
   h+='<div class="modal-handle"></div>';
   h+='<div style="font-size:16px;font-weight:700;color:var(--text);margin-bottom:4px">🧪 Feed '+esc(p.name)+'</div>';
   h+='<div style="font-size:12px;color:var(--text3);margin-bottom:14px">'+plantTypeLabel(p.plantType)+' · Day '+days+' — Week '+tc.week+'</div>';
+  var plog=(D.logs[p.id]||[]).filter(function(l){return l.fed&&l.nutrients&&l.nutrients.length;});
+  if(plog.length){
+    h+='<div style="font-size:11px;color:var(--text3);margin-bottom:8px">Prefilled with what you fed last time — change anything that\'s different today.</div>';
+  }
   if(tc.isRealProduct){
-    h+='<div style="background:var(--bg3);border-radius:10px;padding:10px;margin-bottom:6px;font-size:12px;color:var(--text2)">'+esc(tc.brandLabel)+' suggested: '+(tc.bottles.length?tc.bottles.map(function(b){return esc(b.name)+" "+b.mlPerL+"ml/L";}).join(" · "):"Water only this week")+'</div>';
+    h+='<div style="background:var(--bg3);border-radius:10px;padding:10px;margin-bottom:6px;font-size:12px;color:var(--text2)">'+esc(tc.brandLabel)+' suggested'+(tc.strengthMult&&tc.strengthMult<1?" (autoflower, "+Math.round(tc.strengthMult*100)+"% strength)":"")+': '+(tc.bottles.length?tc.bottles.map(function(b){return esc(b.name)+" "+b.mlPerL+"ml/L";}).join(" · "):"Water only this week")+'</div>';
     if(tc.bottles.length){
-      h+='<button onclick="prefillFeedFromSuggestion()" style="background:none;border:1px dashed var(--border2);border-radius:8px;padding:6px 10px;font-size:11px;color:var(--text3);cursor:pointer;margin-bottom:10px">↓ Use suggested mix below</button>';
+      h+='<button onclick="prefillFeedFromSuggestion()" style="background:none;border:1px dashed var(--border2);border-radius:8px;padding:6px 10px;font-size:11px;color:var(--text3);cursor:pointer;margin-bottom:10px">↓ Use suggested mix instead</button>';
     }
   }else{
     h+='<div style="background:var(--bg3);border-radius:10px;padding:10px;margin-bottom:10px;font-size:12px;color:var(--text2)">Suggested mix: Starter '+tc.starter+' · Grow '+tc.grow+' · Bloom '+tc.bloom+' · PK '+tc.pk+' · Booster '+tc.booster+' ml/L</div>';
@@ -1303,6 +1303,7 @@ function modalFeed(){
     h+='<div style="display:flex;gap:8px;align-items:flex-end" data-feedrow="'+i+'">';
     h+='<div style="flex:2"><input data-fd-name="'+i+'" class="inp" placeholder="e.g. Terra Canna Bloom" value="'+esc(n.name)+'"/></div>';
     h+='<div style="flex:1"><input data-fd-ml="'+i+'" type="number" step="0.1" class="inp" placeholder="ml/L" value="'+esc(n.mlPerL)+'"/></div>';
+    h+='<input data-fd-pantry="'+i+'" type="hidden" value="'+esc(n.pantryId||"")+'"/>';
     h+=(f.nutrients.length>1?'<button onclick="removeFeedRow('+i+')" style="background:none;border:none;color:var(--text3);font-size:18px;padding:0 4px;cursor:pointer">×</button>':'<div style="width:26px"></div>');
     h+='</div>';
   });
@@ -1361,6 +1362,90 @@ function modalTentConfig(){
   return h;
 }
 
+function modalAddPantry(){
+  var f=S.pantryForm;
+  var brand=NUTRIENT_BRANDS[f.brand];
+  var h='<div class="mbg" onclick="if(event.target===this)patch({showAddPantry:false})"><div class="modal">';
+  h+='<div class="modal-handle"></div>';
+  h+='<div style="font-size:16px;font-weight:700;color:var(--text);margin-bottom:4px">🧪 Add to Pantry</div>';
+  h+='<div style="font-size:12px;color:var(--text3);margin-bottom:14px">Pick what you actually have on your shelf.</div>';
+
+  // Brand selector
+  h+='<div style="display:flex;gap:8px;margin-bottom:12px">';
+  Object.keys(NUTRIENT_BRANDS).forEach(function(bk){
+    var active=f.brand===bk;
+    h+='<button onclick="setPantryFormBrand(\''+bk+'\')" class="chip-btn'+(active?" on":"")+'" style="flex:1;margin-bottom:0;text-align:center">'+esc(NUTRIENT_BRANDS[bk].label)+'</button>';
+  });
+  h+='</div>';
+
+  if(f.brand==="custom"){
+    h+='<div><div class="lbl">Bottle Name</div><input id="pf-customname" class="inp" placeholder="e.g. Generic Bloom Booster" value="'+esc(f.customName)+'"/></div>';
+    h+='<div style="margin-top:10px"><div class="lbl">Dose (ml/L, applied every feed)</div><input id="pf-customml" type="number" step="0.1" class="inp" placeholder="e.g. 2" value="'+esc(f.customMl)+'"/></div>';
+  }else{
+    // Mode: starter pack vs individual bottle
+    h+='<div style="display:flex;gap:8px;margin:10px 0 12px">';
+    h+='<button onclick="patch({pantryForm:Object.assign({},S.pantryForm,{mode:\'pack\'})})" class="chip-btn'+(f.mode==="pack"?" on":"")+'" style="flex:1;margin-bottom:0;text-align:center">📦 Starter Pack</button>';
+    h+='<button onclick="patch({pantryForm:Object.assign({},S.pantryForm,{mode:\'single\'})})" class="chip-btn'+(f.mode==="single"?" on":"")+'" style="flex:1;margin-bottom:0;text-align:center">🍼 Single Bottle</button>';
+    h+='</div>';
+    if(f.mode==="pack"){
+      h+='<div style="background:var(--bg3);border-radius:10px;padding:10px;margin-bottom:4px;font-size:12px;color:var(--text2)">Adds: '+(brand.starterPackBottles||[]).map(function(bk){return brand.bottles[bk].name;}).join(" + ")+'</div>';
+    }else{
+      h+='<div><div class="lbl">Bottle</div><select id="pf-bottle" class="inp" onchange="patch({pantryForm:Object.assign({},S.pantryForm,{bottle:this.value})})">';
+      h+=Object.keys(brand.bottles).map(function(bk){return '<option value="'+bk+'" '+(f.bottle===bk?"selected":"")+'>'+esc(brand.bottles[bk].name)+(brand.bottles[bk].role.indexOf("addon")===0?" (add-on)":"")+'</option>';}).join("");
+      h+='</select></div>';
+    }
+  }
+
+  h+='<div style="display:flex;gap:10px;margin-top:12px">';
+  h+='<div style="flex:1"><div class="lbl">Bottle Size (ml)</div><input id="pf-size" type="number" class="inp" value="'+f.sizeMl+'" onchange="patch({pantryForm:Object.assign({},S.pantryForm,{sizeMl:this.value})})"/></div>';
+  h+='<div style="flex:1"><div class="lbl">Currently Filled (%)</div><input id="pf-fill" type="number" min="0" max="100" class="inp" value="'+f.fillPct+'" onchange="patch({pantryForm:Object.assign({},S.pantryForm,{fillPct:this.value})})"/></div>';
+  h+='</div>';
+  h+='<div style="font-size:11px;color:var(--text3);margin-top:6px">New bottle? Leave at 100%. Already opened? Set how full it actually is.</div>';
+
+  h+='<button onclick="submitAddPantry()" class="btn btn-green" style="width:100%;margin-top:16px">Add to Pantry</button>';
+  h+='<button onclick="patch({showAddPantry:false})" class="btn btn-outline" style="width:100%">Cancel</button>';
+  h+='</div></div>';
+  return h;
+}
+
+function openEditPantry(id){
+  patch({showEditPantry:true,editingPantryId:id});
+}
+function modalEditPantry(){
+  var item=D.pantry.find(function(b){return b.id===S.editingPantryId;});
+  if(!item)return "";
+  var pct=pantryPct(item);
+  var h='<div class="mbg" onclick="if(event.target===this)patch({showEditPantry:false})"><div class="modal">';
+  h+='<div class="modal-handle"></div>';
+  h+='<div style="font-size:16px;font-weight:700;color:var(--text);margin-bottom:4px">✏️ Edit '+esc(item.name)+'</div>';
+  h+='<div style="font-size:12px;color:var(--text3);margin-bottom:16px">Update this if your actual bottle level doesn\'t match what the app thinks.</div>';
+  h+='<div style="background:var(--bg3);border-radius:10px;padding:10px;margin-bottom:14px;font-size:12px;color:var(--text2)">App currently shows: '+item.remainingMl+'ml ('+pct+'%) of '+item.sizeMl+'ml</div>';
+  h+='<div style="display:flex;flex-direction:column;gap:12px">';
+  h+='<div><div class="lbl">Bottle Size (ml)</div><input id="ep-pantry-size" type="number" class="inp" value="'+item.sizeMl+'"/></div>';
+  h+='<div><div class="lbl">Actual Level Right Now (%)</div><input id="ep-pantry-fill" type="number" min="0" max="100" class="inp" value="'+pct+'"/></div>';
+  h+='<div style="font-size:11px;color:var(--text3)">Or set the exact ml remaining instead:</div>';
+  h+='<div><div class="lbl">Remaining (ml)</div><input id="ep-pantry-ml" type="number" class="inp" value="'+item.remainingMl+'" oninput="document.getElementById(\'ep-pantry-fill\').value=Math.round((this.value/(document.getElementById(\'ep-pantry-size\').value||1))*100)"/></div>';
+  h+='<button onclick="submitEditPantry()" class="btn btn-green" style="width:100%">Save</button>';
+  h+='<button data-pid="'+item.id+'" onclick="removePantryBottle(this.dataset.pid);patch({showEditPantry:false})" style="background:none;border:1px solid #f8717140;border-radius:12px;padding:11px;color:#f87171;font-size:14px;font-weight:600;cursor:pointer">Remove from Pantry</button>';
+  h+='<button onclick="patch({showEditPantry:false})" class="btn btn-outline" style="width:100%">Cancel</button>';
+  h+='</div></div></div>';
+  return h;
+}
+function submitEditPantry(){
+  var item=D.pantry.find(function(b){return b.id===S.editingPantryId;});
+  if(!item)return;
+  var sizeMl=Number((document.getElementById("ep-pantry-size")||{}).value)||item.sizeMl;
+  var mlInput=document.getElementById("ep-pantry-ml");
+  var fillInput=document.getElementById("ep-pantry-fill");
+  var remainingMl;
+  // if the ml field differs from what fill% alone would produce, trust ml field (last edited wins via oninput sync above)
+  remainingMl=Number(mlInput.value);
+  if(isNaN(remainingMl))remainingMl=Math.round(sizeMl*((Number(fillInput.value)||0)/100));
+  item.sizeMl=sizeMl;
+  item.remainingMl=Math.max(0,Math.min(sizeMl,remainingMl));
+  saveD(D);patch({showEditPantry:false,editingPantryId:null});showToast("✏️ "+item.name+" updated");
+}
+
 function modalAdvisor(){
   var h='<div class="mbg" onclick="if(event.target===this)patch({showAdvisor:false})"><div class="modal">';
   h+='<div class="modal-handle"></div>';
@@ -1412,6 +1497,7 @@ function onDateOrDaysChange(){
 function submitAddPlant(){
   var name=(document.getElementById("ap-name")||{}).value||"";name=name.trim();
   var plantType=(document.getElementById("ap-plantType")||{}).value||S.newPlant.plantType||"cannabis";
+  var flowerType=S.newPlant.flowerType||"auto";
   var strain=(document.getElementById("ap-strain-name")||{}).value||"";
   var startDate=(document.getElementById("ap-date")||{}).value||tod();
   var totalDays=(document.getElementById("ap-days")||{}).value||"77";
@@ -1422,10 +1508,10 @@ function submitAddPlant(){
   var isCutting=document.getElementById("ap-cutting")&&document.getElementById("ap-cutting").checked;
   var isStatic=document.getElementById("ap-static")&&document.getElementById("ap-static").checked;
   if(!name){showToast("Enter a plant name","#f87171");return;}
-  var p={id:uid(),name:name,strain:strain,plantType:plantType,startDate:startDate,totalDays:totalDays,harvestDate:harvestDate,notes:notes,position:position,isPerpetual:isPerpetual,isCutting:isCutting,isStatic:isStatic,harvested:false};
+  var p={id:uid(),name:name,strain:strain,plantType:plantType,flowerType:flowerType,startDate:startDate,totalDays:totalDays,harvestDate:harvestDate,notes:notes,position:position,isPerpetual:isPerpetual,isCutting:isCutting,isStatic:isStatic,harvested:false};
   D.plants.push(p);
   if(!D.logs[p.id])D.logs[p.id]=[];
-  saveD(D);patch({showAddPlant:false,newPlant:{name:"",strain:"",plantType:"cannabis",startDate:tod(),totalDays:"77",harvestDate:addDays(tod(),77),notes:"",position:"",isPerpetual:false,isCutting:false}});
+  saveD(D);patch({showAddPlant:false,newPlant:{name:"",strain:"",plantType:"cannabis",flowerType:"auto",startDate:tod(),totalDays:"77",harvestDate:addDays(tod(),77),notes:"",position:"",isPerpetual:false,isCutting:false}});
   showToast("🌱 "+name+" added! Happy growing!");
 }
 
@@ -1494,44 +1580,88 @@ function togglePerpetualZone(key){
   saveD(D);render();
 }
 
-function setNutrientBrand(brandKey){
-  D.setup.nutrients=D.setup.nutrients||{};
-  D.setup.nutrients.brand=brandKey;
-  D.setup.nutrients.bottles=(NUTRIENT_BRANDS[brandKey].starterPackBottles||[]).slice();
-  saveD(D);render();
+// ── Pantry management ─────────────────────────────────────
+function addPantryBottleFromCatalog(brandKey,bottleKey,sizeMl,fillPct){
+  var brand=NUTRIENT_BRANDS[brandKey];
+  var bottle=brand&&brand.bottles[bottleKey];
+  if(!bottle)return;
+  sizeMl=Number(sizeMl)||1000;
+  fillPct=fillPct===undefined?100:Number(fillPct);
+  D.pantry.push({
+    id:uid(),brandKey:brandKey,bottleKey:bottleKey,name:bottle.name,
+    dose:bottle.dose,sizeMl:sizeMl,remainingMl:Math.round(sizeMl*(fillPct/100))
+  });
+  saveD(D);render();showToast("🧪 Added "+bottle.name+" to pantry");
 }
-function useStarterPack(brandKey){
-  D.setup.nutrients=D.setup.nutrients||{};
-  D.setup.nutrients.bottles=(NUTRIENT_BRANDS[brandKey].starterPackBottles||[]).slice();
-  saveD(D);render();showToast("📦 Starter pack selected");
+function addPantryStarterPack(brandKey,sizeMl,fillPct){
+  var brand=NUTRIENT_BRANDS[brandKey];
+  if(!brand)return;
+  (brand.starterPackBottles||[]).forEach(function(bk){
+    addPantryBottleFromCatalogSilent(brandKey,bk,sizeMl,fillPct);
+  });
+  saveD(D);render();showToast("📦 Starter pack added to pantry");
 }
-function toggleNutrientBottle(bottleKey){
-  D.setup.nutrients=D.setup.nutrients||{bottles:[]};
-  var bottles=D.setup.nutrients.bottles||[];
-  var idx=bottles.indexOf(bottleKey);
-  if(idx>-1)bottles.splice(idx,1);
-  else bottles.push(bottleKey);
-  D.setup.nutrients.bottles=bottles;
-  saveD(D);render();
+function addPantryBottleFromCatalogSilent(brandKey,bottleKey,sizeMl,fillPct){
+  var brand=NUTRIENT_BRANDS[brandKey];
+  var bottle=brand&&brand.bottles[bottleKey];
+  if(!bottle)return;
+  sizeMl=Number(sizeMl)||1000;
+  fillPct=fillPct===undefined?100:Number(fillPct);
+  D.pantry.push({
+    id:uid(),brandKey:brandKey,bottleKey:bottleKey,name:bottle.name,
+    dose:bottle.dose,sizeMl:sizeMl,remainingMl:Math.round(sizeMl*(fillPct/100))
+  });
 }
-function addCustomBottle(){
-  var name=(document.getElementById("custom-bottle-name")||{}).value||"";
-  var ml=(document.getElementById("custom-bottle-ml")||{}).value||"";
-  if(!name||!ml){showToast("Enter a name and ml/L","#f87171");return;}
-  var key="custom_"+name.toLowerCase().replace(/[^a-z0-9]/g,"_")+"_"+Date.now();
-  D.setup.nutrients=D.setup.nutrients||{bottles:[],customBottles:{}};
-  D.setup.nutrients.customBottles=D.setup.nutrients.customBottles||{};
-  D.setup.nutrients.customBottles[key]={name:name,role:"custom",unit:"ml/L",dose:{rooting:0,veg:Number(ml),transition:Number(ml),flower:Number(ml),lateFlower:Number(ml),flush:0}};
-  D.setup.nutrients.bottles=(D.setup.nutrients.bottles||[]).concat([key]);
-  saveD(D);render();showToast("Added "+name);
+function addPantryCustomBottle(name,sizeMl,fillPct,mlPerL){
+  if(!name)return;
+  sizeMl=Number(sizeMl)||1000;
+  fillPct=fillPct===undefined?100:Number(fillPct);
+  mlPerL=Number(mlPerL)||0;
+  D.pantry.push({
+    id:uid(),brandKey:"custom",bottleKey:"custom_"+uid(),name:name,
+    dose:{rooting:0,veg:mlPerL,transition:mlPerL,flower:mlPerL,lateFlower:mlPerL,flush:0},
+    sizeMl:sizeMl,remainingMl:Math.round(sizeMl*(fillPct/100))
+  });
+  saveD(D);render();showToast("Added "+name+" to pantry");
 }
-function removeCustomBottle(key){
-  if(D.setup.nutrients&&D.setup.nutrients.customBottles)delete D.setup.nutrients.customBottles[key];
-  if(D.setup.nutrients&&D.setup.nutrients.bottles){
-    var idx=D.setup.nutrients.bottles.indexOf(key);
-    if(idx>-1)D.setup.nutrients.bottles.splice(idx,1);
+function removePantryBottle(id){
+  D.pantry=D.pantry.filter(function(b){return b.id!==id;});
+  saveD(D);render();showToast("Removed from pantry");
+}
+function deductFromPantry(pantryId,mlUsed){
+  var item=D.pantry.find(function(b){return b.id===pantryId;});
+  if(!item)return;
+  item.remainingMl=Math.max(0,Math.round((item.remainingMl-mlUsed)*10)/10);
+  saveD(D);
+}
+function pantryPct(item){
+  if(!item.sizeMl)return 100;
+  return Math.max(0,Math.min(100,Math.round((item.remainingMl/item.sizeMl)*100)));
+}
+
+function setPantryFormBrand(brandKey){
+  var brand=NUTRIENT_BRANDS[brandKey];
+  var firstBottle=brandKey!=="custom"?Object.keys(brand.bottles)[0]:"";
+  patch({pantryForm:Object.assign({},S.pantryForm,{brand:brandKey,mode:"pack",bottle:firstBottle})});
+}
+
+function submitAddPantry(){
+  var f=S.pantryForm;
+  var sizeMl=(document.getElementById("pf-size")||{}).value||f.sizeMl;
+  var fillPct=(document.getElementById("pf-fill")||{}).value||f.fillPct;
+  if(f.brand==="custom"){
+    var name=(document.getElementById("pf-customname")||{}).value||"";
+    var ml=(document.getElementById("pf-customml")||{}).value||"0";
+    if(!name){showToast("Enter a bottle name","#f87171");return;}
+    addPantryCustomBottle(name,sizeMl,fillPct,ml);
+  }else if(f.mode==="pack"){
+    addPantryStarterPack(f.brand,sizeMl,fillPct);
+  }else{
+    var bottle=(document.getElementById("pf-bottle")||{}).value||f.bottle;
+    if(!bottle){showToast("Pick a bottle","#f87171");return;}
+    addPantryBottleFromCatalog(f.brand,bottle,sizeMl,fillPct);
   }
-  saveD(D);render();
+  patch({showAddPantry:false,pantryForm:{mode:"pack",brand:"canna_terra",bottle:"",sizeMl:1000,fillPct:100,customName:"",customMl:""}});
 }
 
 function submitTentConfig(){
@@ -1547,7 +1677,24 @@ function submitTentConfig(){
 }
 
 function openFeed(pid){
-  patch({showFeed:true,activePlantId:pid,newFeed:{date:tod(),nutrients:[{name:"",mlPerL:""}],waterAmount:"",notes:""}});
+  var p=D.plants.find(function(x){return x.id===pid;});
+  var defaultRows=[{name:"",mlPerL:"",pantryId:""}];
+  var defaultWater="";
+  if(p){
+    var plog=(D.logs[pid]||[]).filter(function(l){return l.fed&&l.nutrients&&l.nutrients.length;});
+    if(plog.length){
+      var last=plog[plog.length-1];
+      defaultRows=last.nutrients.map(function(n){return{name:n.name,mlPerL:n.mlPerL,pantryId:n.pantryId||""};});
+      defaultWater=last.waterAmount||"";
+    }else{
+      var days=daysSince(p.startDate);
+      var tc=getFeedPlanFor(p,days);
+      if(tc.isRealProduct&&tc.bottles.length){
+        defaultRows=tc.bottles.map(function(b){return{name:b.name,mlPerL:String(b.mlPerL),pantryId:b.pantryId||""};});
+      }
+    }
+  }
+  patch({showFeed:true,activePlantId:pid,newFeed:{date:tod(),nutrients:defaultRows,waterAmount:defaultWater,notes:""}});
 }
 function readFeedRowsFromDOM(){
   var rows=document.querySelectorAll('[data-feedrow]');
@@ -1556,9 +1703,10 @@ function readFeedRowsFromDOM(){
     var i=row.getAttribute('data-feedrow');
     var nameEl=document.querySelector('[data-fd-name="'+i+'"]');
     var mlEl=document.querySelector('[data-fd-ml="'+i+'"]');
-    out.push({name:nameEl?nameEl.value:"",mlPerL:mlEl?mlEl.value:""});
+    var pidEl=document.querySelector('[data-fd-pantry="'+i+'"]');
+    out.push({name:nameEl?nameEl.value:"",mlPerL:mlEl?mlEl.value:"",pantryId:pidEl?pidEl.value:""});
   });
-  return out.length?out:[{name:"",mlPerL:""}];
+  return out.length?out:[{name:"",mlPerL:"",pantryId:""}];
 }
 function prefillFeedFromSuggestion(){
   var pid=S.activePlantId;if(!pid)return;
@@ -1566,19 +1714,19 @@ function prefillFeedFromSuggestion(){
   var days=daysSince(p.startDate);
   var tc=getFeedPlanFor(p,days);
   if(!tc.isRealProduct||!tc.bottles.length)return;
-  var rows=tc.bottles.map(function(b){return{name:b.name,mlPerL:String(b.mlPerL)};});
+  var rows=tc.bottles.map(function(b){return{name:b.name,mlPerL:String(b.mlPerL),pantryId:b.pantryId||""};});
   patch({newFeed:Object.assign({},S.newFeed,{nutrients:rows})});
 }
 
 function addFeedRow(){
   var rows=readFeedRowsFromDOM();
-  rows.push({name:"",mlPerL:""});
+  rows.push({name:"",mlPerL:"",pantryId:""});
   patch({newFeed:Object.assign({},S.newFeed,{nutrients:rows})});
 }
 function removeFeedRow(i){
   var rows=readFeedRowsFromDOM();
   rows.splice(i,1);
-  if(!rows.length)rows.push({name:"",mlPerL:""});
+  if(!rows.length)rows.push({name:"",mlPerL:"",pantryId:""});
   patch({newFeed:Object.assign({},S.newFeed,{nutrients:rows})});
 }
 function submitFeed(){
@@ -1589,6 +1737,12 @@ function submitFeed(){
   var waterAmount=(document.getElementById("fd-water")||{}).value||"";
   var notes=(document.getElementById("fd-notes")||{}).value||"";
   var nutrientSummary=nutrients.map(function(n){return n.name+(n.mlPerL?" @"+n.mlPerL+"ml/L":"");}).join(", ");
+  var liters=Number(waterAmount)||0;
+  nutrients.forEach(function(n){
+    if(n.pantryId&&n.mlPerL&&liters>0){
+      deductFromPantry(n.pantryId,Number(n.mlPerL)*liters);
+    }
+  });
   if(!D.logs[pid])D.logs[pid]=[];
   D.logs[pid].push({id:uid(),date:date,height:"",watered:true,fed:true,nutrients:nutrients,nutrient:nutrientSummary,waterAmount:waterAmount,notes:notes});
   saveD(D);patch({showFeed:false});showToast("🧪 Feed logged for "+p.name);
