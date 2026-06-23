@@ -625,6 +625,10 @@ if(!D.setup.numZones)D.setup.numZones=String(TENT_ZONES_PRESETS["5z_ushape"].len
 if(!D.setup.perpetualZones)D.setup.perpetualZones=[];
 if(!D.setup.nutrients)D.setup.nutrients={brand:"canna_terra",bottles:[],customBottles:{}};
 if(!D.setup.nutrients.customBottles)D.setup.nutrients.customBottles={};
+if(!D.setup.nutrients.bottles||!D.setup.nutrients.bottles.length){
+  var _initBrand=NUTRIENT_BRANDS[D.setup.nutrients.brand||"canna_terra"];
+  D.setup.nutrients.bottles=(_initBrand&&_initBrand.starterPackBottles||[]).slice();
+}
 
 var S={
   tab:"plants",
@@ -978,9 +982,10 @@ function tabToday(){
 // ── NUTRIENTS TAB ────────────────────────────────────────
 function tabNutrients(){
   var cfg=D.setup.nutrients||{brand:"canna_terra",bottles:[]};
+  if(!cfg.bottles)cfg.bottles=[];
   var brandKey=cfg.brand||"canna_terra";
   var brand=NUTRIENT_BRANDS[brandKey];
-  var selected=cfg.bottles&&cfg.bottles.length?cfg.bottles:(brand.starterPackBottles||[]);
+  var selected=cfg.bottles; // real saved state only — no fallback substitution
 
   var h='<div style="margin-bottom:14px">';
   h+='<div style="font-size:15px;font-weight:700;color:var(--text);margin-bottom:4px">Nutrient Setup</div>';
