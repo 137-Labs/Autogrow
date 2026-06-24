@@ -90,7 +90,7 @@ var LS="autogrow-v1";
 function loadD(){
   try{var r=localStorage.getItem(LS);if(!r)return null;return JSON.parse(r);}catch(e){return null;}
 }
-function saveD(d){try{localStorage.setItem(LS,JSON.stringify(d));}catch(e){}}
+function saveD(d){try{localStorage.setItem(LS,JSON.stringify(d));return true;}catch(e){if(typeof showToast==="function")showToast("⚠️ Storage full — delete some old photos to keep saving","#f87171");return false;}}
 function uid(){return Date.now().toString(36)+Math.random().toString(36).slice(2);}
 function tod(){return new Date().toISOString().slice(0,10);}
 function esc(s){return String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");}
@@ -476,6 +476,15 @@ var TENT_ZONES_PRESETS={
   "1z_single":[{key:"center",label:"Center"}]
 };
 function getTentZones(){return TENT_ZONES_PRESETS[D.setup.zoneLayout]||TENT_ZONES_PRESETS["5z_ushape"];}
+function getZonePotSize(key){
+  var sizes=D.setup.zonePotSizes||{};
+  return sizes[key]!==undefined?sizes[key]:(D.setup.potSize||11);
+}
+function setZonePotSize(key,liters){
+  D.setup.zonePotSizes=D.setup.zonePotSizes||{};
+  D.setup.zonePotSizes[key]=Number(liters)||11;
+  saveD(D);render();showToast(zoneLabel(key)+" set to "+liters+"L pot");
+}
 function zoneLabel(key){var z=getTentZones().find(function(x){return x.key===key;});return z?z.label:"Unassigned";}
 function getTerraCannaWeek(days){
   var wk=Math.floor(days/7)+1;
@@ -515,6 +524,13 @@ function getWaterSchedule(setup,stage,days){
     harvest:"No watering"
   };
   return schedules[stage.key]||schedules.veg;
+}
+
+function getTargetPH(setup){
+  var medium=setup.medium||"soil";
+  // Soil buffers pH naturally and tolerates a slightly wider range; soilless/coco needs tighter control
+  if(medium==="coco"||medium==="hydro")return "5.5-6.1";
+  return "6.0-6.5";
 }
 
 // ── Perpetual harvest calculator (slot-based) ────────────
@@ -618,7 +634,7 @@ var D=loadD()||{
     lightSchedule:"18/6",medium:"soil",potSize:"11",phing:false,
     avgFlowerDays:"77",harvestGap:"35",numSlots:"1",
     lightHeight:"135",netHeight:"55",canopyMax:"90",
-    zoneLayout:"5z_ushape",perpetualZones:[],
+    zoneLayout:"5z_ushape",perpetualZones:[],zonePotSizes:{},
     nutrients:{brand:"canna_terra",bottles:[],customBottles:{}}
   },
   logs:{},
@@ -631,11 +647,13 @@ if(!D.setup.canopyMax)D.setup.canopyMax="90";
 if(!D.setup.zoneLayout)D.setup.zoneLayout="5z_ushape";
 if(!D.setup.numZones)D.setup.numZones=String(TENT_ZONES_PRESETS["5z_ushape"].length);
 if(!D.setup.perpetualZones)D.setup.perpetualZones=[];
+if(!D.setup.zonePotSizes)D.setup.zonePotSizes={};
 if(!D.pantry)D.pantry=[];
+if(!D.checklistDone)D.checklistDone={};
 
 var S={
-  tab:"plants",
-  showAddPlant:false,
+  tab:"map",
+  showAddPlant:false,showPreGrowChecklist:false,showLogHistory:false,editingLogId:null,
   showEditPlant:false,
   showSetup:false,
   showLog:false,
@@ -643,10 +661,10 @@ var S={
   showNutrients:false,
   editingPlantId:null,
   newPlant:{name:"",strain:"",plantType:"cannabis",flowerType:"auto",startDate:tod(),totalDays:"77",harvestDate:addDays(tod(),77),notes:"",position:"",isPerpetual:false,isCutting:false},
-  newLog:{date:tod(),height:"",notes:"",watered:false,fed:false},
+  newLog:{date:tod(),height:"",notes:"",watered:false,fed:false,photo:null},
   newFeed:{date:tod(),nutrients:[{name:"",mlPerL:""}],waterAmount:"",notes:""},
   newQuickNote:{date:tod(),notes:""},
-  showFeed:false,showQuickNote:false,showTentConfig:false,showAddPantry:false,showEditPantry:false,editingPantryId:null,
+  showFeed:false,showQuickNote:false,showTentConfig:false,showAddPantry:false,showEditPantry:false,editingPantryId:null,showPhotoViewer:null,viewingPhotoPid:null,viewingPhotoLogId:null,
   pantryForm:{mode:"pack",brand:"canna_terra",bottle:"",sizeMl:1000,fillPct:100,customName:"",customMl:""},
   advisorLoading:false,advisorText:"",showAdvisor:false,
   selectedZone:"backCenter"
@@ -673,7 +691,7 @@ function buildApp(){
   h+='<button onclick="openAdvisor()" style="background:#a78bfa15;border:1.5px solid #a78bfa30;border-radius:10px;padding:6px 10px;color:#a78bfa;cursor:pointer;font-size:13px">🧠</button>';
   h+='</div></div>';
   // Tabs
-  var tabs=[["plants","🌱 Plants"],["map","🗺️ Map"],["today","📋 Today"],["nutrients","🧪 Nutrients"],["perpetual","♻️ Perpetual"],["learn","📚 Learn"]];
+  var tabs=[["map","🗺️ Map"],["plants","🌱 Plants"],["today","📋 Today"],["nutrients","🧪 Nutrients"],["perpetual","♻️ Perpetual"],["learn","📚 Learn"]];
   h+='<div class="tbar">';
   tabs.forEach(function(t){h+='<button onclick="patch({tab:\''+t[0]+'\'})" class="'+(S.tab===t[0]?"active":"")+'">'+t[1]+'</button>';});
   h+='</div>';
@@ -696,6 +714,9 @@ function buildApp(){
   if(S.showTentConfig)h+=modalTentConfig();
   if(S.showAddPantry)h+=modalAddPantry();
   if(S.showEditPantry)h+=modalEditPantry();
+  if(S.showPhotoViewer)h+=modalPhotoViewer();
+  if(S.showPreGrowChecklist)h+=modalPreGrowChecklist();
+  if(S.showLogHistory)h+=modalLogHistory();
   if(S.showAdvisor)h+=modalAdvisor();
   return h;
 }
@@ -704,7 +725,10 @@ function buildApp(){
 function tabPlants(){
   var h='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">';
   h+='<div style="font-size:13px;color:var(--text2)">'+D.plants.length+' plant'+(D.plants.length!==1?"s":"")+'</div>';
+  h+='<div style="display:flex;gap:8px">';
+  h+='<button onclick="patch({showPreGrowChecklist:true})" style="background:var(--bg3);border:1.5px solid var(--border2);border-radius:10px;padding:9px 12px;color:var(--text2);font-size:13px;cursor:pointer">✅ Checklist</button>';
   h+='<button onclick="patch({showAddPlant:true})" class="btn btn-green" style="padding:9px 16px;font-size:13px">+ Add Plant</button>';
+  h+='</div>';
   h+='</div>';
   if(D.plants.length===0){
     h+='<div style="text-align:center;padding:48px 20px;border:1.5px dashed var(--border2);border-radius:20px">';
@@ -758,9 +782,21 @@ function tabPlants(){
     h+='<div style="font-size:11px;font-weight:600;color:'+stage.color+';margin-bottom:3px">💡 '+stage.name+' Tip</div>';
     h+='<div style="font-size:12px;color:var(--text2);line-height:1.5">'+stage.tip+'</div>';
     h+='</div>';
+    // Photo timeline strip
+    var photoLogs=plantLogs.filter(function(l){return l.photo;}).slice(-6).reverse();
+    if(photoLogs.length){
+      h+='<div style="padding:10px 16px;border-bottom:1px solid var(--border)">';
+      h+='<div style="font-size:10px;color:var(--text3);font-family:\'DM Mono\',monospace;margin-bottom:6px">📸 GROWTH PHOTOS</div>';
+      h+='<div style="display:flex;gap:6px;overflow-x:auto">';
+      photoLogs.forEach(function(l){
+        h+='<img src="'+l.photo+'" onclick="viewPhotoFullscreen(\''+l.photo.replace(/'/g,"\\'")+'\',\''+p.id+'\',\''+l.id+'\')" style="width:64px;height:64px;object-fit:cover;border-radius:8px;flex-shrink:0;cursor:pointer" title="'+l.date+'"/>';
+      });
+      h+='</div></div>';
+    }
     // Actions
     h+='<div style="padding:10px 16px;display:flex;gap:8px">';
     h+='<button data-pid="'+p.id+'" onclick="openLog(this.dataset.pid)" style="flex:1;background:var(--green);color:#071007;border:none;border-radius:10px;padding:9px;font-weight:600;font-size:13px;cursor:pointer">+ Log Week</button>';
+    h+='<button data-pid="'+p.id+'" onclick="openLogHistory(this.dataset.pid)" style="background:var(--bg3);border:1.5px solid var(--border2);border-radius:10px;padding:9px 12px;color:var(--text2);cursor:pointer;font-size:13px">📜</button>';
     h+='<button data-pid="'+p.id+'" onclick="openEditPlant(this.dataset.pid)" style="background:var(--bg3);border:1.5px solid var(--border2);border-radius:10px;padding:9px 12px;color:var(--text2);cursor:pointer;font-size:13px">✏️</button>';
     h+='<button data-pid="'+p.id+'" onclick="markHarvested(this.dataset.pid)" style="background:#fb923c15;border:1.5px solid #fb923c30;border-radius:10px;padding:9px 12px;color:#fb923c;cursor:pointer;font-size:13px">✂️</button>';
     h+='<button data-pid="'+p.id+'" onclick="deletePlant(this.dataset.pid)" style="background:var(--bg3);border:1.5px solid var(--border2);border-radius:10px;padding:9px 12px;color:var(--text3);cursor:pointer;font-size:13px">🗑️</button>';
@@ -823,7 +859,7 @@ function tabMap(){
     var p=D.plants.find(function(x){return !x.harvested&&x.position===key;});
     var active=S.selectedZone===key;
     var locked=(D.setup.perpetualZones||[]).indexOf(key)>-1;
-    var label=zoneLabel(key)+(locked?' 🔒':"");
+    var label=zoneLabel(key)+(locked?' 🔒':"")+' · '+getZonePotSize(key)+'L';
     var border=active?"var(--green)":"var(--border)";
     var bg=active?"#4ade8015":"var(--bg2)";
     var name=p?(PLANT_TYPES.find(function(t){return t.key===(p.plantType||"cannabis");}).icon+" "+esc(p.name)+(p.isPerpetual?' ♻️':"")):(locked?"— perpetual, empty —":"— empty —");
@@ -863,10 +899,19 @@ function tabMap(){
   // Detail panel for selected zone
   var sel=D.plants.find(function(x){return !x.harvested&&x.position===S.selectedZone;});
   var zoneLocked=(D.setup.perpetualZones||[]).indexOf(S.selectedZone)>-1;
+  var zonePot=getZonePotSize(S.selectedZone);
   h+='<div class="card card-pad">';
   h+='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">';
   h+='<div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;font-family:\'DM Mono\',monospace">'+zoneLabel(S.selectedZone)+'</div>';
   h+='<button onclick="togglePerpetualZone(\''+S.selectedZone+'\')" style="background:'+(zoneLocked?"#a78bfa20":"var(--bg3)")+';border:1px solid '+(zoneLocked?"#a78bfa40":"var(--border2)")+';border-radius:100px;padding:4px 10px;font-size:11px;font-weight:600;color:'+(zoneLocked?"#a78bfa":"var(--text3)")+';cursor:pointer">'+(zoneLocked?"🔒 Perpetual Pot":"🔓 Make Perpetual")+'</button>';
+  h+='</div>';
+  h+='<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">';
+  h+='<span style="font-size:11px;color:var(--text3)">🪴 Pot Size:</span>';
+  h+='<select onchange="setZonePotSize(\''+S.selectedZone+'\',this.value)" style="background:var(--bg3);border:1.5px solid var(--border2);border-radius:8px;padding:5px 8px;color:var(--text);font-size:12px">';
+  [3,5,7,9,11,15,19,25].forEach(function(L){
+    h+='<option value="'+L+'" '+(zonePot===L?"selected":"")+'>'+L+'L</option>';
+  });
+  h+='</select>';
   h+='</div>';
   if(!sel){
     h+='<div style="font-size:13px;color:var(--text3)">'+(zoneLocked?"This pot is locked as Perpetual — the next plant you add here will auto-join the rotation.":"No plant assigned to this position.")+'</div>';
@@ -887,6 +932,9 @@ function tabMap(){
     }
     h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">';
     h+=infoCell("💧","Water",water);
+    h+=infoCell("⚗️","Target pH",getTargetPH(D.setup));
+    h+='</div>';
+    h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">';
     h+=infoCell("🧪","Suggested","Wk"+tc.week+" "+(tc.isRealProduct?(tc.bottles.length?tc.bottles.length+" bottle"+(tc.bottles.length>1?"s":""):"Water only"):tc.note));
     h+='</div>';
     h+='<div style="background:var(--bg3);border-radius:10px;padding:10px;margin-bottom:8px">';
@@ -914,9 +962,12 @@ function tabMap(){
     h+='<button data-pid="'+sel.id+'" onclick="openFeed(this.dataset.pid)" style="background:#4ade8015;border:1.5px solid #4ade8030;border-radius:10px;padding:10px;color:var(--green);cursor:pointer;font-size:13px;font-weight:600">🧪 Feed / Water</button>';
     h+='<button data-pid="'+sel.id+'" onclick="openQuickNote(this.dataset.pid)" style="background:#60a5fa15;border:1.5px solid #60a5fa30;border-radius:10px;padding:10px;color:#60a5fa;cursor:pointer;font-size:13px;font-weight:600">✂️ Trim / Action</button>';
     h+='</div>';
+    h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">';
+    h+='<button data-pid="'+sel.id+'" onclick="openLog(this.dataset.pid)" style="background:#a78bfa15;border:1.5px solid #a78bfa30;border-radius:10px;padding:10px;color:#a78bfa;cursor:pointer;font-size:13px;font-weight:600">📏 Log Height/Photo</button>';
+    h+='<button data-pid="'+sel.id+'" onclick="openLogHistory(this.dataset.pid)" style="background:var(--bg3);border:1.5px solid var(--border2);border-radius:10px;padding:10px;color:var(--text2);cursor:pointer;font-size:13px;font-weight:600">📜 Log History</button>';
+    h+='</div>';
     h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px">';
-    h+='<button data-pid="'+sel.id+'" onclick="openLog(this.dataset.pid)" style="background:var(--bg3);border:1.5px solid var(--border2);border-radius:10px;padding:10px;color:var(--text2);cursor:pointer;font-size:13px;font-weight:600">📋 Full Log</button>';
-    h+='<button data-pid="'+sel.id+'" onclick="if(confirm(\''+esc(sel.name).replace(/'/g,"\\'")+' — mark as harvested?\'))markHarvested(this.dataset.pid)" style="background:#fb923c15;border:1.5px solid #fb923c30;border-radius:10px;padding:10px;color:#fb923c;cursor:pointer;font-size:13px;font-weight:600">🌾 Harvest</button>';
+    h+='<button data-pid="'+sel.id+'" onclick="if(confirm(\''+esc(sel.name).replace(/'/g,"\\'")+' — mark as harvested?\'))markHarvested(this.dataset.pid)" style="background:#fb923c15;border:1.5px solid #fb923c30;border-radius:10px;padding:10px;color:#fb923c;cursor:pointer;font-size:13px;font-weight:600;grid-column:1/-1">🌾 Harvest</button>';
     h+='</div>';
     h+='<button data-pid="'+sel.id+'" onclick="openEditPlant(this.dataset.pid)" class="btn btn-outline" style="width:100%">✏️ Edit / Reassign Position</button>';
   }
@@ -944,8 +995,9 @@ function tabToday(){
     h+='</div>';
     h+='<div style="padding:12px 14px">';
     // Checklist items
+    var targetPH=getTargetPH(D.setup);
     var tasks=[
-      {icon:"💧",title:"Water",detail:water},
+      {icon:"💧",title:"Water",detail:water+" · target pH "+targetPH},
       {icon:"💡",title:"Light Distance",detail:dist.min+"–"+dist.max+"cm — "+dist.note},
       {icon:"🌡️",title:"Environment",detail:"Temp: 22-26°C | Humidity: "+(stage.key==="flower"?"40-50%":"55-70%")},
     ];
@@ -1265,6 +1317,15 @@ function modalLog(){
   h+='<label style="flex:1;background:var(--bg3);border:1.5px solid var(--border2);border-radius:12px;padding:11px;display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="lg-fed" style="width:16px;height:16px;accent-color:var(--green)"/> <span style="font-size:13px;color:var(--text)">🧪 Fed</span></label>';
   h+='</div>';
   h+='<div><div class="lbl">Notes / Observations</div><textarea id="lg-notes" class="inp" rows="3" placeholder="How does she look? Any issues? Changes made?" style="resize:none"></textarea></div>';
+  h+='<div><div class="lbl">📸 Photo (optional)</div>';
+  h+='<input id="lg-photo-file" type="file" accept="image/*" capture="environment" style="display:none" onchange="handleLogPhotoSelect(this)"/>';
+  if(S.newLog.photo){
+    h+='<div style="position:relative;margin-bottom:8px"><img src="'+S.newLog.photo+'" style="width:100%;max-height:220px;object-fit:cover;border-radius:12px"/>';
+    h+='<button onclick="patch({newLog:Object.assign({},S.newLog,{photo:null})})" style="position:absolute;top:6px;right:6px;background:rgba(0,0,0,0.6);border:none;border-radius:100px;width:28px;height:28px;color:#fff;font-size:16px;cursor:pointer">×</button></div>';
+  }else{
+    h+='<button onclick="document.getElementById(\'lg-photo-file\').click()" style="width:100%;background:var(--bg3);border:1.5px dashed var(--border2);border-radius:12px;padding:16px;color:var(--text3);font-size:13px;cursor:pointer">📷 Tap to add a photo</button>';
+  }
+  h+='</div>';
   h+='<button onclick="submitLog()" class="btn btn-green" style="width:100%">Save Log Entry</button>';
   h+='</div></div></div>';
   return h;
@@ -1526,7 +1587,156 @@ function saveSetup(){
   saveD(D);patch({showSetup:false});showToast("Setup saved!");
 }
 
-function openLog(pid){patch({showLog:true,activePlantId:pid,newLog:{date:tod(),height:"",notes:"",watered:false,fed:false}});}
+function openLog(pid){patch({showLog:true,activePlantId:pid,newLog:{date:tod(),height:"",notes:"",watered:false,fed:false,photo:null}});}
+
+function viewPhotoFullscreen(dataUrl,pid,logId){
+  patch({showPhotoViewer:dataUrl,viewingPhotoPid:pid,viewingPhotoLogId:logId});
+}
+function deleteCurrentPhoto(){
+  var pid=S.viewingPhotoPid,logId=S.viewingPhotoLogId;
+  if(pid&&logId&&D.logs[pid]){
+    var entry=D.logs[pid].find(function(l){return l.id===logId;});
+    if(entry)entry.photo=null;
+  }
+  saveD(D);patch({showPhotoViewer:null,viewingPhotoPid:null,viewingPhotoLogId:null});showToast("Photo deleted");
+}
+function modalPhotoViewer(){
+  var h='<div class="mbg" onclick="if(event.target===this)patch({showPhotoViewer:null})" style="align-items:center;padding:20px;flex-direction:column;gap:14px">';
+  h+='<img src="'+S.showPhotoViewer+'" style="max-width:100%;max-height:75vh;border-radius:16px"/>';
+  if(S.viewingPhotoLogId){
+    h+='<button onclick="deleteCurrentPhoto()" style="background:#f8717120;border:1px solid #f8717150;border-radius:12px;padding:10px 20px;color:#f87171;font-size:13px;font-weight:600;cursor:pointer">🗑️ Delete This Photo</button>';
+  }
+  h+='</div>';
+  return h;
+}
+
+var PRE_GROW_CHECKLIST=[
+  {key:"tent",icon:"⛺",text:"Tent is set up and zipped — no light leaks"},
+  {key:"light",icon:"💡",text:"Light installed at correct height and on a timer"},
+  {key:"fan",icon:"🌀",text:"Exhaust/oscillating fan running for airflow"},
+  {key:"medium",icon:"🪴",text:"Pots filled with medium (soil/coco) and pre-moistened"},
+  {key:"phmeter",icon:"⚗️",text:"pH meter on hand and calibrated"},
+  {key:"pantry",icon:"🧪",text:"Nutrient pantry stocked with at least your base bottles"},
+  {key:"seeds",icon:"🌱",text:"Seeds/clones ready (germinated or rooting started)"},
+  {key:"thermo",icon:"🌡️",text:"Thermometer/hygrometer placed in the tent"}
+];
+function toggleChecklistItem(key){
+  D.checklistDone=D.checklistDone||{};
+  D.checklistDone[key]=!D.checklistDone[key];
+  saveD(D);render();
+}
+function modalPreGrowChecklist(){
+  var done=D.checklistDone||{};
+  var doneCount=PRE_GROW_CHECKLIST.filter(function(i){return done[i.key];}).length;
+  var h='<div class="mbg" onclick="if(event.target===this)patch({showPreGrowChecklist:false})"><div class="modal">';
+  h+='<div class="modal-handle"></div>';
+  h+='<div style="font-size:16px;font-weight:700;color:var(--text);margin-bottom:4px">✅ Pre-Grow Checklist</div>';
+  h+='<div style="font-size:12px;color:var(--text3);margin-bottom:14px">'+doneCount+'/'+PRE_GROW_CHECKLIST.length+' ready — run through this before you plant.</div>';
+  h+='<div class="pt" style="height:7px;margin-bottom:16px"><div class="pb" style="width:'+Math.round((doneCount/PRE_GROW_CHECKLIST.length)*100)+'%;background:var(--green);height:7px"></div></div>';
+  PRE_GROW_CHECKLIST.forEach(function(item){
+    var checked=!!done[item.key];
+    h+='<label onclick="event.stopPropagation();toggleChecklistItem(\''+item.key+'\')" class="chip'+(checked?" on":"")+'"><input type="checkbox" '+(checked?"checked":"")+'/> '+item.icon+' '+esc(item.text)+'</label>';
+  });
+  h+='<button onclick="patch({showPreGrowChecklist:false})" class="btn btn-green" style="width:100%;margin-top:14px">Done</button>';
+  h+='</div></div>';
+  return h;
+}
+
+function openLogHistory(pid){
+  patch({showLogHistory:true,activePlantId:pid,editingLogId:null});
+}
+function startEditLog(logId){
+  patch({editingLogId:logId});
+}
+function cancelEditLog(){
+  patch({editingLogId:null});
+}
+function saveEditedLog(logId){
+  var pid=S.activePlantId;if(!pid||!D.logs[pid])return;
+  var entry=D.logs[pid].find(function(l){return l.id===logId;});
+  if(!entry)return;
+  var dateEl=document.getElementById("lh-date-"+logId);
+  var heightEl=document.getElementById("lh-height-"+logId);
+  var notesEl=document.getElementById("lh-notes-"+logId);
+  if(dateEl)entry.date=dateEl.value||entry.date;
+  if(heightEl)entry.height=heightEl.value||"";
+  if(notesEl)entry.notes=notesEl.value||"";
+  saveD(D);patch({editingLogId:null});showToast("Log entry updated");
+}
+function deleteLogEntry(logId){
+  var pid=S.activePlantId;if(!pid||!D.logs[pid])return;
+  D.logs[pid]=D.logs[pid].filter(function(l){return l.id!==logId;});
+  saveD(D);render();showToast("Log entry deleted","#f87171");
+}
+function modalLogHistory(){
+  var pid=S.activePlantId;
+  var p=D.plants.find(function(x){return x.id===pid;});
+  if(!p)return "";
+  var logs=(D.logs[pid]||[]).slice().sort(function(a,b){return new Date(b.date)-new Date(a.date);});
+  var h='<div class="mbg" onclick="if(event.target===this)patch({showLogHistory:false,editingLogId:null})"><div class="modal">';
+  h+='<div class="modal-handle"></div>';
+  h+='<div style="font-size:16px;font-weight:700;color:var(--text);margin-bottom:4px">📜 '+esc(p.name)+' — Log History</div>';
+  h+='<div style="font-size:12px;color:var(--text3);margin-bottom:14px">'+logs.length+' entr'+(logs.length===1?"y":"ies")+' — tap ✏️ to edit, 🗑️ to delete</div>';
+  if(!logs.length){
+    h+='<div style="text-align:center;padding:24px;color:var(--text3);font-size:13px">No log entries yet.</div>';
+  }
+  logs.forEach(function(l){
+    var editing=S.editingLogId===l.id;
+    h+='<div style="background:var(--bg2);border:1.5px solid var(--border);border-radius:12px;padding:12px;margin-bottom:8px">';
+    if(editing){
+      h+='<div style="display:flex;flex-direction:column;gap:8px">';
+      h+='<input id="lh-date-'+l.id+'" type="date" class="inp" value="'+l.date+'"/>';
+      h+='<input id="lh-height-'+l.id+'" type="number" class="inp" placeholder="Height (cm)" value="'+esc(l.height||"")+'"/>';
+      h+='<textarea id="lh-notes-'+l.id+'" class="inp" rows="2" style="resize:none" placeholder="Notes">'+esc(l.notes||"")+'</textarea>';
+      h+='<div style="display:flex;gap:8px">';
+      h+='<button onclick="saveEditedLog(\''+l.id+'\')" class="btn btn-green" style="flex:1">Save</button>';
+      h+='<button onclick="cancelEditLog()" class="btn btn-outline" style="flex:1">Cancel</button>';
+      h+='</div></div>';
+    }else{
+      h+='<div style="display:flex;justify-content:space-between;align-items:flex-start">';
+      h+='<div style="flex:1">';
+      h+='<div style="font-size:12px;color:var(--text3);font-family:\'DM Mono\',monospace;margin-bottom:4px">'+l.date+(l.height?" · "+esc(l.height)+"cm":"")+(l.watered?" · 💧":"")+(l.fed?" · 🧪":"")+'</div>';
+      if(l.nutrient)h+='<div style="font-size:12px;color:var(--text2);margin-bottom:2px">🧪 '+esc(l.nutrient)+(l.waterAmount?" in "+esc(l.waterAmount)+"L":"")+'</div>';
+      if(l.notes)h+='<div style="font-size:13px;color:var(--text)">'+esc(l.notes)+'</div>';
+      if(l.photo)h+='<img src="'+l.photo+'" onclick="viewPhotoFullscreen(\''+l.photo.replace(/'/g,"\\'")+'\',\''+pid+'\',\''+l.id+'\')" style="width:60px;height:60px;object-fit:cover;border-radius:8px;margin-top:6px;cursor:pointer"/>';
+      h+='</div>';
+      h+='<div style="display:flex;gap:4px;flex-shrink:0;margin-left:8px">';
+      h+='<button onclick="startEditLog(\''+l.id+'\')" style="background:none;border:none;font-size:16px;cursor:pointer;padding:2px">✏️</button>';
+      h+='<button onclick="if(confirm(\'Delete this log entry?\'))deleteLogEntry(\''+l.id+'\')" style="background:none;border:none;font-size:16px;cursor:pointer;padding:2px">🗑️</button>';
+      h+='</div></div>';
+    }
+    h+='</div>';
+  });
+  h+='<button onclick="patch({showLogHistory:false,editingLogId:null})" class="btn btn-outline" style="width:100%;margin-top:8px">Close</button>';
+  h+='</div></div>';
+  return h;
+}
+
+
+
+
+
+function handleLogPhotoSelect(input){
+  var file=input.files&&input.files[0];
+  if(!file)return;
+  var reader=new FileReader();
+  reader.onload=function(e){
+    var img=new Image();
+    img.onload=function(){
+      var maxDim=800;
+      var w=img.width,h=img.height;
+      if(w>h&&w>maxDim){h=Math.round(h*(maxDim/w));w=maxDim;}
+      else if(h>maxDim){w=Math.round(w*(maxDim/h));h=maxDim;}
+      var canvas=document.createElement("canvas");
+      canvas.width=w;canvas.height=h;
+      canvas.getContext("2d").drawImage(img,0,0,w,h);
+      var compressed=canvas.toDataURL("image/jpeg",0.6);
+      patch({newLog:Object.assign({},S.newLog,{photo:compressed})});
+    };
+    img.src=e.target.result;
+  };
+  reader.readAsDataURL(file);
+}
 
 function submitLog(){
   var pid=S.activePlantId;if(!pid)return;
@@ -1536,7 +1746,7 @@ function submitLog(){
   var watered=document.getElementById("lg-watered")&&document.getElementById("lg-watered").checked;
   var fed=document.getElementById("lg-fed")&&document.getElementById("lg-fed").checked;
   if(!D.logs[pid])D.logs[pid]=[];
-  D.logs[pid].push({id:uid(),date:date,height:height,notes:notes,watered:watered,fed:fed});
+  D.logs[pid].push({id:uid(),date:date,height:height,notes:notes,watered:watered,fed:fed,photo:S.newLog.photo||null});
   saveD(D);patch({showLog:false});showToast("Log entry saved!");
 }
 
