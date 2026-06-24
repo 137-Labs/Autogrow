@@ -6,6 +6,8 @@
 <meta name="theme-color" content="#0a1a0a"/>
 <meta name="mobile-web-app-capable" content="yes"/>
 <meta name="apple-mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+<link rel="manifest" id="pwa-manifest"/>
 <title>AutoGrow</title>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=DM+Mono:wght@400;500&display=swap');
@@ -92,23 +94,98 @@ function loadD(){
 }
 function saveD(d){try{localStorage.setItem(LS,JSON.stringify(d));return true;}catch(e){if(typeof showToast==="function")showToast("⚠️ Storage full — delete some old photos to keep saving","#f87171");return false;}}
 
+// ── Photo storage (IndexedDB) ─────────────────────────────
+// Photos are too large for localStorage at any real volume, so they live in
+// IndexedDB keyed by a short id; D.logs only stores that id (photoId), never
+// the raw base64 string. photoCache holds already-loaded photos in memory
+// so re-renders within a session don't need to re-fetch from IndexedDB.
+var photoDB=null;
+var photoCache={};
+function openPhotoDB(){
+  return new Promise(function(resolve,reject){
+    if(photoDB){resolve(photoDB);return;}
+    var req=indexedDB.open("autogrow-photos",1);
+    req.onupgradeneeded=function(e){
+      e.target.result.createObjectStore("photos");
+    };
+    req.onsuccess=function(e){photoDB=e.target.result;resolve(photoDB);};
+    req.onerror=function(){reject(req.error);};
+  });
+}
+function savePhotoBlob(photoId,dataUrl){
+  return openPhotoDB().then(function(db){
+    return new Promise(function(resolve,reject){
+      var tx=db.transaction("photos","readwrite");
+      tx.objectStore("photos").put(dataUrl,photoId);
+      tx.oncomplete=function(){photoCache[photoId]=dataUrl;resolve();};
+      tx.onerror=function(){reject(tx.error);};
+    });
+  });
+}
+function getPhotoBlob(photoId){
+  if(photoCache[photoId])return Promise.resolve(photoCache[photoId]);
+  return openPhotoDB().then(function(db){
+    return new Promise(function(resolve,reject){
+      var tx=db.transaction("photos","readonly");
+      var req=tx.objectStore("photos").get(photoId);
+      req.onsuccess=function(){photoCache[photoId]=req.result;resolve(req.result);};
+      req.onerror=function(){reject(req.error);};
+    });
+  });
+}
+function deletePhotoBlob(photoId){
+  delete photoCache[photoId];
+  return openPhotoDB().then(function(db){
+    return new Promise(function(resolve){
+      var tx=db.transaction("photos","readwrite");
+      tx.objectStore("photos").delete(photoId);
+      tx.oncomplete=function(){resolve();};
+      tx.onerror=function(){resolve();}; // don't block UI on delete failures
+    });
+  });
+}
+// Hydrates every <img data-photo-id="..."> placeholder currently in the DOM.
+// Called after every render() so async-loaded photos always reach the screen.
+function hydratePhotos(){
+  document.querySelectorAll('img[data-photo-id]').forEach(function(img){
+    var id=img.getAttribute('data-photo-id');
+    if(!id||img.src&&img.src.indexOf('data:')===0)return; // already hydrated
+    getPhotoBlob(id).then(function(dataUrl){
+      if(dataUrl)img.src=dataUrl;
+      else img.style.display="none";
+    }).catch(function(){img.style.display="none";});
+  });
+}
+
 function downloadBackup(){
-  try{
-    var payload={app:"AutoGrow",backupVersion:1,exportedAt:new Date().toISOString(),data:D};
-    var blob=new Blob([JSON.stringify(payload)],{type:"application/json"});
-    var url=URL.createObjectURL(blob);
-    var a=document.createElement("a");
-    var stamp=tod().replace(/-/g,"");
-    a.href=url;
-    a.download="autogrow-backup-"+stamp+".json";
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    setTimeout(function(){URL.revokeObjectURL(url);},1000);
-    showToast("💾 Backup downloaded");
-  }catch(e){
-    showToast("⚠️ Backup failed — try again","#f87171");
-  }
+  showToast("💾 Preparing backup...");
+  // Gather every referenced photo from IndexedDB so the backup is complete
+  var photoIds=[];
+  Object.keys(D.logs||{}).forEach(function(pid){
+    (D.logs[pid]||[]).forEach(function(l){if(l.photoId)photoIds.push(l.photoId);});
+  });
+  Promise.all(photoIds.map(function(id){
+    return getPhotoBlob(id).then(function(dataUrl){return{id:id,dataUrl:dataUrl};}).catch(function(){return{id:id,dataUrl:null};});
+  })).then(function(results){
+    var photos={};
+    results.forEach(function(r){if(r.dataUrl)photos[r.id]=r.dataUrl;});
+    try{
+      var payload={app:"AutoGrow",backupVersion:2,exportedAt:new Date().toISOString(),data:D,photos:photos};
+      var blob=new Blob([JSON.stringify(payload)],{type:"application/json"});
+      var url=URL.createObjectURL(blob);
+      var a=document.createElement("a");
+      var stamp=tod().replace(/-/g,"");
+      a.href=url;
+      a.download="autogrow-backup-"+stamp+".json";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(function(){URL.revokeObjectURL(url);},1000);
+      showToast("💾 Backup downloaded ("+results.length+" photo"+(results.length!==1?"s":"")+" included)");
+    }catch(e){
+      showToast("⚠️ Backup failed — try again","#f87171");
+    }
+  });
 }
 
 function handleRestoreFile(input){
@@ -129,8 +206,10 @@ function handleRestoreFile(input){
       return;
     }
     var plantCount=incoming.plants.length;
+    var photos=parsed&&parsed.photos?parsed.photos:{};
+    var photoCount=Object.keys(photos).length;
     var exportedAt=parsed&&parsed.exportedAt?new Date(parsed.exportedAt).toLocaleString():"unknown date";
-    if(!confirm("Restore backup from "+exportedAt+"?\n\nThis backup has "+plantCount+" plant"+(plantCount!==1?"s":"")+". This will REPLACE everything currently in the app — your current data will be gone unless you've backed it up too.\n\nContinue?")){
+    if(!confirm("Restore backup from "+exportedAt+"?\n\nThis backup has "+plantCount+" plant"+(plantCount!==1?"s":"")+" and "+photoCount+" photo"+(photoCount!==1?"s":"")+". This will REPLACE everything currently in the app — your current data will be gone unless you've backed it up too.\n\nContinue?")){
       input.value="";
       return;
     }
@@ -142,9 +221,12 @@ function handleRestoreFile(input){
     if(!D.setup.perpetualZones)D.setup.perpetualZones=[];
     if(!D.setup.zonePotSizes)D.setup.zonePotSizes={};
     saveD(D);
-    input.value="";
-    render();
-    showToast("✅ Restored "+plantCount+" plant"+(plantCount!==1?"s":"")+" from backup");
+    var photoKeys=Object.keys(photos);
+    Promise.all(photoKeys.map(function(id){return savePhotoBlob(id,photos[id]).catch(function(){});})).then(function(){
+      input.value="";
+      render();
+      showToast("✅ Restored "+plantCount+" plant"+(plantCount!==1?"s":"")+" and "+photoKeys.length+" photo"+(photoKeys.length!==1?"s":""));
+    });
   };
   reader.readAsText(file);
 }
@@ -333,6 +415,7 @@ function resolveDose(doseVal,phaseProgress){
 
 // ── Build the actual feed plan for a plant using whichever bottles the user has selected ──
 function getNutrientStrengthMultiplier(plant){
+  if(plant.strengthOverride!==undefined&&plant.strengthOverride!==null&&plant.strengthOverride!=="")return Number(plant.strengthOverride)/100;
   if((plant.plantType||"cannabis")!=="cannabis")return 1;
   // Autoflowers need roughly 25-50% of photoperiod nutrient strength; 50% is the safe default,
   // most growers start here and increase only if the plant shows deficiency signs.
@@ -354,7 +437,8 @@ function getRealFeedPlan(plant,days,stage){
     return{pantryId:item.id,name:item.name,brandKey:item.brandKey,bottleKey:item.bottleKey,mlPerL:ml,remainingMl:item.remainingMl,sizeMl:item.sizeMl};
   }).filter(Boolean);
   var brandLabels=Array.from(new Set(pantry.map(function(i){return NUTRIENT_BRANDS[i.brandKey]?NUTRIENT_BRANDS[i.brandKey].label:i.brandKey;})));
-  return{brandLabel:brandLabels.join(" + "),phase:phase,bottles:bottleDoses,strengthMult:strengthMult};
+  var realBrandsOnly=brandLabels.filter(function(l){return l!=="Custom"&&l!=="custom";});
+  return{brandLabel:brandLabels.join(" + "),phase:phase,bottles:bottleDoses,strengthMult:strengthMult,mixedBrands:realBrandsOnly.length>1};
 }
 
 var TERRA_CANNA=[
@@ -431,11 +515,12 @@ function getFeedPlanFor(plant,days){
       brandLabel:real.brandLabel,
       bottles:real.bottles,
       strengthMult:real.strengthMult,
+      mixedBrands:real.mixedBrands,
       note:real.bottles.map(function(b){return b.name+" "+b.mlPerL+"ml/L";}).join(", ")||"Water only this week"
     };
   }
   if(real){
-    return{week:Math.floor(days/7)+1,stage:stage.name,isRealProduct:true,brandLabel:real.brandLabel,bottles:[],strengthMult:real.strengthMult,note:"Water only this week"};
+    return{week:Math.floor(days/7)+1,stage:stage.name,isRealProduct:true,brandLabel:real.brandLabel,bottles:[],strengthMult:real.strengthMult,mixedBrands:real.mixedBrands,note:"Water only this week"};
   }
   // fallback to legacy abstract charts if no nutrient config set
   var type=plant.plantType||"cannabis";
@@ -568,9 +653,9 @@ function getLightDistance(setup,stage){
 }
 
 // ── Water calculator ─────────────────────────────────────
-function getWaterSchedule(setup,stage,days){
+function getWaterSchedule(setup,stage,days,plant){
   var medium=setup.medium||"soil";
-  var potL=Number(setup.potSize)||11;
+  var potL=plant&&plant.position?getZonePotSize(plant.position):(Number(setup.potSize)||11);
   var schedules={
     seed:"2-5ml around seedling only",
     seedling:"50-100ml every 2-3 days",
@@ -588,6 +673,39 @@ function getTargetPH(setup){
   // Soil buffers pH naturally and tolerates a slightly wider range; soilless/coco needs tighter control
   if(medium==="coco"||medium==="hydro")return "5.5-6.1";
   return "6.0-6.5";
+}
+
+// ── VPD (Vapor Pressure Deficit) calculator ──────────────
+// VPD = SVP * (1 - RH/100), where SVP uses the leaf temp (leaves run ~2-3°F
+// cooler than air under transpiration), via the standard Magnus-Tetens approximation.
+function calcVPD(tempC,rh,leafOffsetC){
+  leafOffsetC=leafOffsetC===undefined?1.5:leafOffsetC; // ~2-3°F ≈ 1-1.7°C cooler
+  var leafTempC=tempC-leafOffsetC;
+  var svp=0.6108*Math.exp((17.27*leafTempC)/(leafTempC+237.3));
+  var vpd=svp*(1-rh/100);
+  return Math.round(vpd*100)/100;
+}
+function getVPDTarget(stageKey){
+  var bands={
+    seed:{min:0.4,max:0.8,label:"Seedling"},
+    rooting:{min:0.4,max:0.8,label:"Rooting"},
+    seedling:{min:0.4,max:0.8,label:"Seedling"},
+    veg:{min:0.8,max:1.2,label:"Vegetative"},
+    preflower:{min:0.9,max:1.3,label:"Pre-Flower"},
+    transition:{min:0.9,max:1.3,label:"Transition"},
+    flower:{min:1.0,max:1.5,label:"Flowering"},
+    flowerset:{min:1.0,max:1.5,label:"Flowering"},
+    producing:{min:1.0,max:1.5,label:"Producing"},
+    flush:{min:1.2,max:1.6,label:"Late Flower/Flush"},
+    harvest:{min:1.2,max:1.6,label:"Harvest Window"},
+    established:{min:0.8,max:1.2,label:"Established"}
+  };
+  return bands[stageKey]||bands.veg;
+}
+function getVPDStatus(vpd,target){
+  if(vpd<target.min)return{zone:"low",color:"#60a5fa",label:"Too Humid / Stagnant"};
+  if(vpd>target.max)return{zone:"high",color:"#f87171",label:"Too Dry / Stress Risk"};
+  return{zone:"good",color:"#4ade80",label:"Sweet Spot"};
 }
 
 // ── Perpetual harvest calculator (slot-based) ────────────
@@ -708,6 +826,27 @@ if(!D.setup.zonePotSizes)D.setup.zonePotSizes={};
 if(!D.pantry)D.pantry=[];
 if(!D.checklistDone)D.checklistDone={};
 
+// One-time migration: move any old-style embedded base64 photos (l.photo)
+// into IndexedDB and replace with a photoId reference. Runs once per legacy
+// entry found; harmless no-op once everyone's migrated.
+(function migrateLegacyPhotos(){
+  var found=[];
+  Object.keys(D.logs||{}).forEach(function(pid){
+    (D.logs[pid]||[]).forEach(function(l){
+      if(l.photo&&!l.photoId)found.push(l);
+    });
+  });
+  if(!found.length)return;
+  found.forEach(function(l){
+    var photoId=l.id+"_photo";
+    savePhotoBlob(photoId,l.photo).then(function(){
+      l.photoId=photoId;
+      delete l.photo;
+      saveD(D);
+    }).catch(function(){});
+  });
+})();
+
 var S={
   tab:"map",
   showAddPlant:false,showPreGrowChecklist:false,showLogHistory:false,editingLogId:null,
@@ -733,6 +872,7 @@ function upd(fn){fn(D);saveD(D);render();}
 function render(){
   document.getElementById("app").innerHTML=buildApp();
   bindEv();
+  hydratePhotos();
 }
 
 function buildApp(){
@@ -806,7 +946,7 @@ function tabPlants(){
     var remaining=isOngoing?null:Math.max(0,totalDays-days);
     var pct=isOngoing?100:Math.min((days/totalDays)*100,100);
     var dist=getLightDistance(D.setup,stage);
-    var water=getWaterSchedule(D.setup,stage,days);
+    var water=getWaterSchedule(D.setup,stage,days,p);
     var plantLogs=D.logs[p.id]||[];
     var lastLog=plantLogs.length>0?plantLogs[plantLogs.length-1]:null;
     h+='<div class="card" style="margin-bottom:12px">';
@@ -843,13 +983,13 @@ function tabPlants(){
     h+='<div style="font-size:12px;color:var(--text2);line-height:1.5">'+stage.tip+'</div>';
     h+='</div>';
     // Photo timeline strip
-    var photoLogs=plantLogs.filter(function(l){return l.photo;}).slice(-6).reverse();
+    var photoLogs=plantLogs.filter(function(l){return l.photoId;}).slice(-6).reverse();
     if(photoLogs.length){
       h+='<div style="padding:10px 16px;border-bottom:1px solid var(--border)">';
       h+='<div style="font-size:10px;color:var(--text3);font-family:\'DM Mono\',monospace;margin-bottom:6px">📸 GROWTH PHOTOS</div>';
       h+='<div style="display:flex;gap:6px;overflow-x:auto">';
       photoLogs.forEach(function(l){
-        h+='<img src="'+l.photo+'" onclick="viewPhotoFullscreen(\''+l.photo.replace(/'/g,"\\'")+'\',\''+p.id+'\',\''+l.id+'\')" style="width:64px;height:64px;object-fit:cover;border-radius:8px;flex-shrink:0;cursor:pointer" title="'+l.date+'"/>';
+        h+='<img data-photo-id="'+l.photoId+'" onclick="viewPhotoFullscreen(\''+l.photoId+'\',\''+p.id+'\',\''+l.id+'\')" style="width:64px;height:64px;object-fit:cover;border-radius:8px;flex-shrink:0;cursor:pointer;background:var(--bg3)" title="'+l.date+'"/>';
       });
       h+='</div></div>';
     }
@@ -980,7 +1120,7 @@ function tabMap(){
     var days=daysSince(sel.startDate);
     var totalDays=plantTotalDays(sel);
     var stage=getStageFor(sel,days,totalDays);
-    var water=getWaterSchedule(D.setup,stage,days);
+    var water=getWaterSchedule(D.setup,stage,days,sel);
     var tc=getFeedPlanFor(sel,days);
     var typeLbl=plantTypeLabel(sel.plantType);
     var learned=getLearnedFeed(sel,days);
@@ -1005,6 +1145,20 @@ function tabMap(){
       h+='<div style="font-size:12px;color:var(--text2)">Starter '+tc.starter+' · Grow '+tc.grow+' · Bloom '+tc.bloom+' · PK '+tc.pk+' · Booster '+tc.booster+'</div>';
     }
     h+='</div>';
+    if(tc.mixedBrands){
+      h+='<div style="background:#facc1512;border:1px solid #facc1530;border-radius:10px;padding:8px 10px;margin-bottom:8px;font-size:11px;color:#facc15">⚠️ Mixing nutrient brands in one feed can cause lockouts or pH swings — consider sticking to one line per plant</div>';
+    }
+    if(tc.isRealProduct){
+      var currentPct=Math.round((tc.strengthMult||1)*100);
+      h+='<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">';
+      h+='<span style="font-size:11px;color:var(--text3)">Feed Strength:</span>';
+      h+='<input type="number" min="10" max="150" value="'+currentPct+'" data-pid="'+sel.id+'" onchange="setStrengthOverride(this.dataset.pid,this.value)" style="width:60px;background:var(--bg3);border:1.5px solid var(--border2);border-radius:8px;padding:5px 8px;color:var(--text);font-size:12px"/>';
+      h+='<span style="font-size:11px;color:var(--text3)">%</span>';
+      if(sel.strengthOverride!==undefined&&sel.strengthOverride!==null&&sel.strengthOverride!==""){
+        h+='<button data-pid="'+sel.id+'" onclick="clearStrengthOverride(this.dataset.pid)" style="background:none;border:none;color:var(--text3);font-size:11px;text-decoration:underline;cursor:pointer">reset to auto</button>';
+      }
+      h+='</div>';
+    }
     if(learned){
       h+='<div style="background:#a78bfa15;border:1px solid #a78bfa30;border-radius:10px;padding:10px;margin-bottom:12px">';
       h+='<div style="font-size:10px;color:#a78bfa;font-family:\'DM Mono\',monospace;margin-bottom:4px">🧠 LEARNED FROM YOUR HISTORY ('+learned.sampleSize+' feed'+(learned.sampleSize>1?"s":"")+(learned.matchedStage?" at this stage":" — overall avg")+')</div>';
@@ -1039,12 +1193,35 @@ function tabMap(){
 function tabToday(){
   if(D.plants.length===0)return'<div style="text-align:center;padding:48px 20px;color:var(--text3)">Add a plant first to see today\'s tasks</div>';
   var h='<div style="font-size:13px;color:var(--text2);margin-bottom:14px">'+new Date().toDateString()+'</div>';
+
+  // VPD calculator
+  var vpdTemp=Number(D.setup.vpdTemp)||24;
+  var vpdRh=Number(D.setup.vpdRh)||60;
+  var vpd=calcVPD(vpdTemp,vpdRh);
+  var primaryStage=D.plants.length?getStageFor(D.plants[0],daysSince(D.plants[0].startDate),plantTotalDays(D.plants[0])):{key:"veg"};
+  var vpdTarget=getVPDTarget(primaryStage.key);
+  var vpdStatus=getVPDStatus(vpd,vpdTarget);
+  h+='<div class="card card-pad" style="margin-bottom:14px">';
+  h+='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">';
+  h+='<div style="font-size:13px;font-weight:700;color:var(--text)">🌡️ VPD Calculator</div>';
+  h+='<div style="font-size:10px;color:var(--text3);font-family:\'DM Mono\',monospace">target '+vpdTarget.min+'–'+vpdTarget.max+'kPa ('+vpdTarget.label+')</div>';
+  h+='</div>';
+  h+='<div style="display:flex;gap:10px;margin-bottom:10px">';
+  h+='<div style="flex:1"><div class="lbl">Tent Temp (°C)</div><input type="number" step="0.5" value="'+vpdTemp+'" onchange="D.setup.vpdTemp=this.value;saveD(D);render();" class="inp"/></div>';
+  h+='<div style="flex:1"><div class="lbl">Humidity (%)</div><input type="number" step="1" value="'+vpdRh+'" onchange="D.setup.vpdRh=this.value;saveD(D);render();" class="inp"/></div>';
+  h+='</div>';
+  h+='<div style="display:flex;align-items:center;gap:12px;background:'+vpdStatus.color+'15;border:1.5px solid '+vpdStatus.color+'40;border-radius:12px;padding:12px">';
+  h+='<div style="font-size:24px;font-weight:800;color:'+vpdStatus.color+'">'+vpd+'</div>';
+  h+='<div><div style="font-size:13px;font-weight:700;color:'+vpdStatus.color+'">kPa — '+vpdStatus.label+'</div>';
+  h+='<div style="font-size:11px;color:var(--text3)">'+(vpdStatus.zone==="low"?"Lower humidity or raise temp slightly":vpdStatus.zone==="high"?"Raise humidity or lower temp — plant may be stressing":"Conditions are dialed in")+'</div></div>';
+  h+='</div>';
+  h+='</div>';
   D.plants.filter(function(p){return !p.harvested;}).forEach(function(p){
     var days=daysSince(p.startDate);
     var totalDays=plantTotalDays(p);
     var stage=getStageFor(p,days,totalDays);
     var tips=getWeeklyTips(days,D.setup);
-    var water=getWaterSchedule(D.setup,stage,days);
+    var water=getWaterSchedule(D.setup,stage,days,p);
     var dist=getLightDistance(D.setup,stage);
     var week=Math.floor(days/7)+1;
     var nutriRow=TERRA_CANNA[Math.min(week-1,TERRA_CANNA.length-1)];
@@ -1104,6 +1281,11 @@ function tabNutrients(){
   h+='<button onclick="patch({showAddPantry:true})" style="background:var(--green);color:#071007;border:none;border-radius:10px;padding:9px 14px;font-size:13px;font-weight:700;cursor:pointer;white-space:nowrap">+ Add</button>';
   h+='</div>';
 
+  var lowStock=D.pantry.filter(function(i){return pantryPct(i)<=30;});
+  if(lowStock.length){
+    h+='<div style="background:#facc1512;border:1px solid #facc1530;border-radius:12px;padding:10px 14px;margin-bottom:14px;font-size:12px;color:#facc15">🛒 '+lowStock.length+' bottle'+(lowStock.length>1?"s":"")+' running low: '+lowStock.map(function(i){return esc(i.name);}).join(", ")+'</div>';
+  }
+
   if(!D.pantry.length){
     h+='<div style="text-align:center;padding:32px 16px;color:var(--text3);background:var(--bg2);border:1.5px solid var(--border);border-radius:14px;margin-bottom:16px">';
     h+='<div style="font-size:32px;margin-bottom:8px">🗄️</div>';
@@ -1121,6 +1303,11 @@ function tabNutrients(){
       h+='</div>';
       h+='<div class="pt" style="height:7px;margin-bottom:4px"><div class="pb" style="width:'+pct+'%;background:'+barColor+';height:7px"></div></div>';
       h+='<div style="display:flex;justify-content:space-between;font-size:11px;color:var(--text3);font-family:\'DM Mono\',monospace"><span>'+item.remainingMl+'ml left</span><span>'+pct+'% of '+item.sizeMl+'ml</span></div>';
+      if(pct<=15){
+        h+='<div style="margin-top:8px;background:#f8717115;border:1px solid #f8717130;border-radius:8px;padding:6px 10px;font-size:11px;color:#f87171;font-weight:600">⚠️ Order now — shipping takes about a week</div>';
+      }else if(pct<=30){
+        h+='<div style="margin-top:8px;background:#facc1515;border:1px solid #facc1530;border-radius:8px;padding:6px 10px;font-size:11px;color:#facc15;font-weight:600">🛒 Bottle is low</div>';
+      }
       h+='</div>';
     });
   }
@@ -1290,9 +1477,9 @@ function modalAddPlant(){
     '<option value="">— Unassigned —</option>'+
     getTentZones().map(function(z){return '<option value="'+z.key+'" '+(S.newPlant.position===z.key?"selected":"")+'>'+z.label+'</option>';}).join("")+
     '</select></div>';
-  h+='<label onclick="event.stopPropagation();var el=document.getElementById(\'ap-perpetual\');el.checked=!el.checked;patch({newPlant:Object.assign({},S.newPlant,{isPerpetual:el.checked})});" class="chip'+(S.newPlant.isPerpetual?" on":"")+'"><input id="ap-perpetual" type="checkbox" '+(S.newPlant.isPerpetual?"checked":"")+'/> Part of Perpetual Harvest rotation</label>';
-  h+='<label onclick="event.stopPropagation();var el=document.getElementById(\'ap-cutting\');el.checked=!el.checked;patch({newPlant:Object.assign({},S.newPlant,{isCutting:el.checked})});" class="chip'+(S.newPlant.isCutting?" on":"")+'"><input id="ap-cutting" type="checkbox" '+(S.newPlant.isCutting?"checked":"")+'/> This is a cutting/clone (not grown from seed)</label>';
-  h+='<label onclick="event.stopPropagation();var el=document.getElementById(\'ap-static\');el.checked=!el.checked;patch({newPlant:Object.assign({},S.newPlant,{isStatic:el.checked})});" class="chip'+(S.newPlant.isStatic?" on":"")+'"><input id="ap-static" type="checkbox" '+(S.newPlant.isStatic?"checked":"")+'/> Static / forever-fruiting plant (no harvest cycle, lives in the tent)</label>';
+  h+='<label class="chip'+(S.newPlant.isPerpetual?" on":"")+'"><input id="ap-perpetual" type="checkbox" '+(S.newPlant.isPerpetual?"checked":"")+' onchange="patch({newPlant:Object.assign({},S.newPlant,{isPerpetual:this.checked})});" style="pointer-events:auto"/> Part of Perpetual Harvest rotation</label>';
+  h+='<label class="chip'+(S.newPlant.isCutting?" on":"")+'"><input id="ap-cutting" type="checkbox" '+(S.newPlant.isCutting?"checked":"")+' onchange="patch({newPlant:Object.assign({},S.newPlant,{isCutting:this.checked})});" style="pointer-events:auto"/> This is a cutting/clone (not grown from seed)</label>';
+  h+='<label class="chip'+(S.newPlant.isStatic?" on":"")+'"><input id="ap-static" type="checkbox" '+(S.newPlant.isStatic?"checked":"")+' onchange="patch({newPlant:Object.assign({},S.newPlant,{isStatic:this.checked})});" style="pointer-events:auto"/> Static / forever-fruiting plant (no harvest cycle, lives in the tent)</label>';
   h+='<div><div class="lbl">Notes (optional)</div><textarea id="ap-notes" class="inp" rows="2" placeholder="Anything you want to remember..." style="resize:none">'+esc(S.newPlant.notes)+'</textarea></div>';
   h+='<button onclick="submitAddPlant()" class="btn btn-green" style="width:100%">Start Growing 🌱</button>';
   h+='<button onclick="patch({showAddPlant:false})" class="btn btn-outline" style="width:100%">Cancel</button>';
@@ -1326,9 +1513,9 @@ function modalEditPlant(){
     '<option value="">— Unassigned —</option>'+
     getTentZones().map(function(z){return '<option value="'+z.key+'" '+((p.position||"")===z.key?"selected":"")+'>'+z.label+'</option>';}).join("")+
     '</select></div>';
-  h+='<label onclick="event.stopPropagation();var pl=D.plants.find(function(x){return x.id===S.editingPlantId;});if(pl){pl.isPerpetual=!pl.isPerpetual;render();}" class="chip'+(p.isPerpetual?" on":"")+'"><input id="ep-perpetual" type="checkbox" '+(p.isPerpetual?"checked":"")+'/> Part of Perpetual Harvest rotation</label>';
-  h+='<label onclick="event.stopPropagation();var pl=D.plants.find(function(x){return x.id===S.editingPlantId;});if(pl){pl.isCutting=!pl.isCutting;render();}" class="chip'+(p.isCutting?" on":"")+'"><input id="ep-cutting" type="checkbox" '+(p.isCutting?"checked":"")+'/> This is a cutting/clone (not grown from seed)</label>';
-  h+='<label onclick="event.stopPropagation();var pl=D.plants.find(function(x){return x.id===S.editingPlantId;});if(pl){pl.isStatic=!pl.isStatic;render();}" class="chip'+(p.isStatic?" on":"")+'"><input id="ep-static" type="checkbox" '+(p.isStatic?"checked":"")+'/> Static / forever-fruiting plant (no harvest cycle, lives in the tent)</label>';
+  h+='<label class="chip'+(p.isPerpetual?" on":"")+'"><input id="ep-perpetual" type="checkbox" '+(p.isPerpetual?"checked":"")+' onchange="var pl=D.plants.find(function(x){return x.id===S.editingPlantId;});if(pl){pl.isPerpetual=this.checked;render();}" style="pointer-events:auto"/> Part of Perpetual Harvest rotation</label>';
+  h+='<label class="chip'+(p.isCutting?" on":"")+'"><input id="ep-cutting" type="checkbox" '+(p.isCutting?"checked":"")+' onchange="var pl=D.plants.find(function(x){return x.id===S.editingPlantId;});if(pl){pl.isCutting=this.checked;render();}" style="pointer-events:auto"/> This is a cutting/clone (not grown from seed)</label>';
+  h+='<label class="chip'+(p.isStatic?" on":"")+'"><input id="ep-static" type="checkbox" '+(p.isStatic?"checked":"")+' onchange="var pl=D.plants.find(function(x){return x.id===S.editingPlantId;});if(pl){pl.isStatic=this.checked;render();}" style="pointer-events:auto"/> Static / forever-fruiting plant (no harvest cycle, lives in the tent)</label>';
   h+='<button onclick="submitEditPlant()" class="btn btn-green" style="width:100%">Save Changes</button>';
   h+='<button onclick="patch({showEditPlant:false})" class="btn btn-outline" style="width:100%">Cancel</button>';
   h+='</div></div></div>';
@@ -1408,6 +1595,9 @@ function modalFeed(){
   }
   if(tc.isRealProduct){
     h+='<div style="background:var(--bg3);border-radius:10px;padding:10px;margin-bottom:6px;font-size:12px;color:var(--text2)">'+esc(tc.brandLabel)+' suggested'+(tc.strengthMult&&tc.strengthMult<1?" (autoflower, "+Math.round(tc.strengthMult*100)+"% strength)":"")+': '+(tc.bottles.length?tc.bottles.map(function(b){return esc(b.name)+" "+b.mlPerL+"ml/L";}).join(" · "):"Water only this week")+'</div>';
+    if(tc.mixedBrands){
+      h+='<div style="background:#facc1512;border:1px solid #facc1530;border-radius:8px;padding:6px 10px;margin-bottom:8px;font-size:11px;color:#facc15">⚠️ Your pantry has multiple nutrient brands active — mixing lines can cause lockouts</div>';
+    }
     if(tc.bottles.length){
       h+='<button onclick="prefillFeedFromSuggestion()" style="background:none;border:1px dashed var(--border2);border-radius:8px;padding:6px 10px;font-size:11px;color:var(--text3);cursor:pointer;margin-bottom:10px">↓ Use suggested mix instead</button>';
     }
@@ -1649,20 +1839,21 @@ function saveSetup(){
 
 function openLog(pid){patch({showLog:true,activePlantId:pid,newLog:{date:tod(),height:"",notes:"",watered:false,fed:false,photo:null}});}
 
-function viewPhotoFullscreen(dataUrl,pid,logId){
-  patch({showPhotoViewer:dataUrl,viewingPhotoPid:pid,viewingPhotoLogId:logId});
+function viewPhotoFullscreen(photoId,pid,logId){
+  patch({showPhotoViewer:photoId,viewingPhotoPid:pid,viewingPhotoLogId:logId});
 }
 function deleteCurrentPhoto(){
-  var pid=S.viewingPhotoPid,logId=S.viewingPhotoLogId;
+  var pid=S.viewingPhotoPid,logId=S.viewingPhotoLogId,photoId=S.showPhotoViewer;
   if(pid&&logId&&D.logs[pid]){
     var entry=D.logs[pid].find(function(l){return l.id===logId;});
-    if(entry)entry.photo=null;
+    if(entry)entry.photoId=null;
   }
+  if(photoId)deletePhotoBlob(photoId);
   saveD(D);patch({showPhotoViewer:null,viewingPhotoPid:null,viewingPhotoLogId:null});showToast("Photo deleted");
 }
 function modalPhotoViewer(){
   var h='<div class="mbg" onclick="if(event.target===this)patch({showPhotoViewer:null})" style="align-items:center;padding:20px;flex-direction:column;gap:14px">';
-  h+='<img src="'+S.showPhotoViewer+'" style="max-width:100%;max-height:75vh;border-radius:16px"/>';
+  h+='<img data-photo-id="'+S.showPhotoViewer+'" style="max-width:100%;max-height:75vh;border-radius:16px;background:var(--bg3);min-height:200px;min-width:200px"/>';
   if(S.viewingPhotoLogId){
     h+='<button onclick="deleteCurrentPhoto()" style="background:#f8717120;border:1px solid #f8717150;border-radius:12px;padding:10px 20px;color:#f87171;font-size:13px;font-weight:600;cursor:pointer">🗑️ Delete This Photo</button>';
   }
@@ -1725,6 +1916,8 @@ function saveEditedLog(logId){
 }
 function deleteLogEntry(logId){
   var pid=S.activePlantId;if(!pid||!D.logs[pid])return;
+  var entry=D.logs[pid].find(function(l){return l.id===logId;});
+  if(entry&&entry.photoId)deletePhotoBlob(entry.photoId);
   D.logs[pid]=D.logs[pid].filter(function(l){return l.id!==logId;});
   saveD(D);render();showToast("Log entry deleted","#f87171");
 }
@@ -1758,7 +1951,7 @@ function modalLogHistory(){
       h+='<div style="font-size:12px;color:var(--text3);font-family:\'DM Mono\',monospace;margin-bottom:4px">'+l.date+(l.height?" · "+esc(l.height)+"cm":"")+(l.watered?" · 💧":"")+(l.fed?" · 🧪":"")+'</div>';
       if(l.nutrient)h+='<div style="font-size:12px;color:var(--text2);margin-bottom:2px">🧪 '+esc(l.nutrient)+(l.waterAmount?" in "+esc(l.waterAmount)+"L":"")+'</div>';
       if(l.notes)h+='<div style="font-size:13px;color:var(--text)">'+esc(l.notes)+'</div>';
-      if(l.photo)h+='<img src="'+l.photo+'" onclick="viewPhotoFullscreen(\''+l.photo.replace(/'/g,"\\'")+'\',\''+pid+'\',\''+l.id+'\')" style="width:60px;height:60px;object-fit:cover;border-radius:8px;margin-top:6px;cursor:pointer"/>';
+      if(l.photoId)h+='<img data-photo-id="'+l.photoId+'" onclick="viewPhotoFullscreen(\''+l.photoId+'\',\''+pid+'\',\''+l.id+'\')" style="width:60px;height:60px;object-fit:cover;border-radius:8px;margin-top:6px;cursor:pointer;background:var(--bg3)"/>';
       h+='</div>';
       h+='<div style="display:flex;gap:4px;flex-shrink:0;margin-left:8px">';
       h+='<button onclick="startEditLog(\''+l.id+'\')" style="background:none;border:none;font-size:16px;cursor:pointer;padding:2px">✏️</button>';
@@ -1805,8 +1998,19 @@ function submitLog(){
   var notes=(document.getElementById("lg-notes")||{}).value||"";
   var watered=document.getElementById("lg-watered")&&document.getElementById("lg-watered").checked;
   var fed=document.getElementById("lg-fed")&&document.getElementById("lg-fed").checked;
+  var entry={id:uid(),date:date,height:height,notes:notes,watered:watered,fed:fed,photoId:null};
   if(!D.logs[pid])D.logs[pid]=[];
-  D.logs[pid].push({id:uid(),date:date,height:height,notes:notes,watered:watered,fed:fed,photo:S.newLog.photo||null});
+  D.logs[pid].push(entry);
+  if(S.newLog.photo){
+    var photoId=entry.id+"_photo";
+    savePhotoBlob(photoId,S.newLog.photo).then(function(){
+      entry.photoId=photoId;
+      saveD(D);render();
+    }).catch(function(){
+      showToast("⚠️ Photo couldn't be saved, but the rest of the log saved fine","#f87171");
+      saveD(D);render();
+    });
+  }
   saveD(D);patch({showLog:false});showToast("Log entry saved!");
 }
 
@@ -1830,6 +2034,18 @@ function markFruitingStarted(pid){
   var p=D.plants.find(function(x){return x.id===pid;});if(!p)return;
   p.fruitingStartDate=tod();
   saveD(D);render();showToast("🍅 "+p.name+" is now producing!");
+}
+
+function setStrengthOverride(pid,pct){
+  var p=D.plants.find(function(x){return x.id===pid;});if(!p)return;
+  var val=Math.max(10,Math.min(150,Number(pct)||100));
+  p.strengthOverride=val;
+  saveD(D);render();showToast("Feed strength set to "+val+"%");
+}
+function clearStrengthOverride(pid){
+  var p=D.plants.find(function(x){return x.id===pid;});if(!p)return;
+  delete p.strengthOverride;
+  saveD(D);render();showToast("Back to automatic strength");
 }
 
 function togglePerpetualZone(key){
@@ -2046,11 +2262,18 @@ function submitEditPlant(){
   p.totalDays=(document.getElementById("ep-days")||{}).value||p.totalDays;
   p.harvestDate=(document.getElementById("ep-harvest")||{}).value||p.harvestDate;
   p.position=(document.getElementById("ep-position")||{}).value||"";
-  p.isPerpetual=p.isPerpetual||(D.setup.perpetualZones||[]).indexOf(p.position)>-1;
+  var epPerp=document.getElementById("ep-perpetual");
+  var epCut=document.getElementById("ep-cutting");
+  var epStat=document.getElementById("ep-static");
+  p.isPerpetual=(epPerp?epPerp.checked:p.isPerpetual)||(D.setup.perpetualZones||[]).indexOf(p.position)>-1;
+  p.isCutting=epCut?epCut.checked:p.isCutting;
+  p.isStatic=epStat?epStat.checked:p.isStatic;
   saveD(D);patch({showEditPlant:false,editingPlantId:null});showToast("Plant updated!");
 }
 
 function deletePlant(pid){
+  var logsToClean=D.logs[pid]||[];
+  logsToClean.forEach(function(l){if(l.photoId)deletePhotoBlob(l.photoId);});
   D.plants=D.plants.filter(function(p){return p.id!==pid;});
   delete D.logs[pid];
   saveD(D);render();showToast("Plant removed","#f87171");
@@ -2100,6 +2323,36 @@ async function runAdvisor(){
 }
 
 render();
+
+// ── PWA setup: installable "Add to Home Screen" via inline manifest ──
+// Note: a true service worker (for offline caching) requires a same-origin
+// .js file served over http(s) — browsers reject blob:/data: URLs for service
+// worker scripts by spec, so that part isn't achievable in a single HTML file.
+// The manifest below still gets you the install prompt, standalone window,
+// and home screen icon — just not offline caching beyond what the browser
+// already caches on its own.
+(function setupPWA(){
+  var iconSvg='<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192"><rect width="192" height="192" rx="36" fill="%230a1a0a"/><path d="M96 40c-30 10-50 35-50 70 0 25 20 42 50 42s50-17 50-42c0-35-20-60-50-70z" fill="%234ade80"/><path d="M96 50v92" stroke="%230a1a0a" stroke-width="6" stroke-linecap="round"/></svg>';
+  var iconDataUri='data:image/svg+xml,'+iconSvg;
+  var manifest={
+    name:"AutoGrow",
+    short_name:"AutoGrow",
+    description:"Seed to harvest tracker for cannabis, tomatoes, and basil",
+    start_url:".",
+    display:"standalone",
+    background_color:"#071007",
+    theme_color:"#0a1a0a",
+    icons:[
+      {src:iconDataUri,sizes:"192x192",type:"image/svg+xml"},
+      {src:iconDataUri,sizes:"512x512",type:"image/svg+xml"}
+    ]
+  };
+  var manifestBlob=new Blob([JSON.stringify(manifest)],{type:"application/json"});
+  var manifestUrl=URL.createObjectURL(manifestBlob);
+  var manifestLink=document.getElementById("pwa-manifest");
+  if(manifestLink)manifestLink.href=manifestUrl;
+})();
+
 </script>
 </body>
 </html>
