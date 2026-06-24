@@ -91,6 +91,63 @@ function loadD(){
   try{var r=localStorage.getItem(LS);if(!r)return null;return JSON.parse(r);}catch(e){return null;}
 }
 function saveD(d){try{localStorage.setItem(LS,JSON.stringify(d));return true;}catch(e){if(typeof showToast==="function")showToast("⚠️ Storage full — delete some old photos to keep saving","#f87171");return false;}}
+
+function downloadBackup(){
+  try{
+    var payload={app:"AutoGrow",backupVersion:1,exportedAt:new Date().toISOString(),data:D};
+    var blob=new Blob([JSON.stringify(payload)],{type:"application/json"});
+    var url=URL.createObjectURL(blob);
+    var a=document.createElement("a");
+    var stamp=tod().replace(/-/g,"");
+    a.href=url;
+    a.download="autogrow-backup-"+stamp+".json";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(function(){URL.revokeObjectURL(url);},1000);
+    showToast("💾 Backup downloaded");
+  }catch(e){
+    showToast("⚠️ Backup failed — try again","#f87171");
+  }
+}
+
+function handleRestoreFile(input){
+  var file=input.files&&input.files[0];
+  if(!file)return;
+  var reader=new FileReader();
+  reader.onload=function(e){
+    var parsed;
+    try{parsed=JSON.parse(e.target.result);}catch(err){
+      showToast("⚠️ That file isn't valid — couldn't read it","#f87171");
+      input.value="";
+      return;
+    }
+    var incoming=parsed&&parsed.data?parsed.data:parsed;
+    if(!incoming||typeof incoming!=="object"||!Array.isArray(incoming.plants)){
+      showToast("⚠️ That doesn't look like an AutoGrow backup","#f87171");
+      input.value="";
+      return;
+    }
+    var plantCount=incoming.plants.length;
+    var exportedAt=parsed&&parsed.exportedAt?new Date(parsed.exportedAt).toLocaleString():"unknown date";
+    if(!confirm("Restore backup from "+exportedAt+"?\n\nThis backup has "+plantCount+" plant"+(plantCount!==1?"s":"")+". This will REPLACE everything currently in the app — your current data will be gone unless you've backed it up too.\n\nContinue?")){
+      input.value="";
+      return;
+    }
+    D=incoming;
+    if(!D.logs)D.logs={};
+    if(!D.pantry)D.pantry=[];
+    if(!D.checklistDone)D.checklistDone={};
+    if(!D.setup)D.setup={};
+    if(!D.setup.perpetualZones)D.setup.perpetualZones=[];
+    if(!D.setup.zonePotSizes)D.setup.zonePotSizes={};
+    saveD(D);
+    input.value="";
+    render();
+    showToast("✅ Restored "+plantCount+" plant"+(plantCount!==1?"s":"")+" from backup");
+  };
+  reader.readAsText(file);
+}
 function uid(){return Date.now().toString(36)+Math.random().toString(36).slice(2);}
 function tod(){return new Date().toISOString().slice(0,10);}
 function esc(s){return String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");}
@@ -687,6 +744,9 @@ function buildApp(){
   h+='<div><div style="font-size:18px;font-weight:700;color:var(--text)"><span style="color:var(--green)">Auto</span>Grow</div>';
   h+='<div style="font-size:10px;color:var(--text3);font-family:\'DM Mono\',monospace">Seed to Harvest</div></div></div>';
   h+='<div style="display:flex;gap:6px">';
+  h+='<input id="restore-file" type="file" accept="application/json" style="display:none" onchange="handleRestoreFile(this)"/>';
+  h+='<button onclick="downloadBackup()" title="Backup" style="background:var(--bg3);border:1.5px solid var(--border2);border-radius:10px;padding:6px 10px;color:var(--text2);cursor:pointer;font-size:13px">💾</button>';
+  h+='<button onclick="document.getElementById(\'restore-file\').click()" title="Restore" style="background:var(--bg3);border:1.5px solid var(--border2);border-radius:10px;padding:6px 10px;color:var(--text2);cursor:pointer;font-size:13px">📂</button>';
   h+='<button onclick="patch({showSetup:true})" style="background:var(--bg3);border:1.5px solid var(--border2);border-radius:10px;padding:6px 10px;color:var(--text2);cursor:pointer;font-size:13px">⚙️</button>';
   h+='<button onclick="openAdvisor()" style="background:#a78bfa15;border:1.5px solid #a78bfa30;border-radius:10px;padding:6px 10px;color:#a78bfa;cursor:pointer;font-size:13px">🧠</button>';
   h+='</div></div>';
