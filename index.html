@@ -565,15 +565,19 @@ function getLearnedFeed(plant,days){
 var RQS_STRAINS=[
   {name:"Quick One",days:60},
   {name:"Easy Bud",days:60},
+  {name:"Fast Eddy",days:60},
   {name:"Royal CBDV Automatic",days:63},
   {name:"Bubble Kush Automatic",days:63},
   {name:"HulkBerry Automatic",days:63},
   {name:"Purple Queen Automatic",days:63},
   {name:"Sherbet Queen Automatic",days:63},
   {name:"Watermelon Automatic",days:63},
+  {name:"Special Queen 1 Automatic",days:63},
   {name:"Royal Bluematic",days:67},
   {name:"Royal Kush Automatic",days:67},
   {name:"Diesel Automatic",days:67},
+  {name:"White Widow Automatic",days:67},
+  {name:"Royal Cookies Automatic",days:70},
   {name:"Candy Kush Express",days:70},
   {name:"Northern Light Automatic",days:70},
   {name:"Titan F1",days:73},
@@ -804,6 +808,7 @@ function getZoneRotation(){
 var D=loadD()||{
   plants:[],
   pantry:[],
+  seedVault:[],
   setup:{
     tentSize:"70x70",lightModel:"Mars Hydro FC1500",lightWatts:"150",
     lightSchedule:"18/6",medium:"soil",potSize:"11",phing:false,
@@ -825,6 +830,7 @@ if(!D.setup.perpetualZones)D.setup.perpetualZones=[];
 if(!D.setup.zonePotSizes)D.setup.zonePotSizes={};
 if(!D.pantry)D.pantry=[];
 if(!D.checklistDone)D.checklistDone={};
+if(!D.seedVault)D.seedVault=[];
 
 // One-time migration: move any old-style embedded base64 photos (l.photo)
 // into IndexedDB and replace with a photoId reference. Runs once per legacy
@@ -860,8 +866,9 @@ var S={
   newLog:{date:tod(),height:"",notes:"",watered:false,fed:false,photo:null},
   newFeed:{date:tod(),nutrients:[{name:"",mlPerL:""}],waterAmount:"",notes:""},
   newQuickNote:{date:tod(),notes:""},
-  showFeed:false,showQuickNote:false,showTentConfig:false,showAddPantry:false,showEditPantry:false,editingPantryId:null,showPhotoViewer:null,viewingPhotoPid:null,viewingPhotoLogId:null,
+  showFeed:false,showQuickNote:false,showTentConfig:false,showAddPantry:false,showEditPantry:false,editingPantryId:null,showPhotoViewer:null,viewingPhotoPid:null,viewingPhotoLogId:null,showAddSeed:false,
   pantryForm:{mode:"pack",brand:"canna_terra",bottle:"",sizeMl:1000,fillPct:100,customName:"",customMl:""},
+  seedForm:{useRQS:true,rqsName:"",customName:"",plantType:"cannabis",qty:5,notes:""},
   advisorLoading:false,advisorText:"",showAdvisor:false,
   selectedZone:"backCenter"
 };
@@ -891,7 +898,7 @@ function buildApp(){
   h+='<button onclick="openAdvisor()" style="background:#a78bfa15;border:1.5px solid #a78bfa30;border-radius:10px;padding:6px 10px;color:#a78bfa;cursor:pointer;font-size:13px">🧠</button>';
   h+='</div></div>';
   // Tabs
-  var tabs=[["map","🗺️ Map"],["plants","🌱 Plants"],["today","📋 Today"],["nutrients","🧪 Nutrients"],["perpetual","♻️ Perpetual"],["learn","📚 Learn"]];
+  var tabs=[["map","🗺️ Map"],["plants","🌱 Plants"],["today","📋 Today"],["nutrients","🗄️ Pantry"],["perpetual","♻️ Perpetual"],["learn","📚 Learn"]];
   h+='<div class="tbar">';
   tabs.forEach(function(t){h+='<button onclick="patch({tab:\''+t[0]+'\'})" class="'+(S.tab===t[0]?"active":"")+'">'+t[1]+'</button>';});
   h+='</div>';
@@ -913,6 +920,7 @@ function buildApp(){
   if(S.showQuickNote)h+=modalQuickNote();
   if(S.showTentConfig)h+=modalTentConfig();
   if(S.showAddPantry)h+=modalAddPantry();
+  if(S.showAddSeed)h+=modalAddSeed();
   if(S.showEditPantry)h+=modalEditPantry();
   if(S.showPhotoViewer)h+=modalPhotoViewer();
   if(S.showPreGrowChecklist)h+=modalPreGrowChecklist();
@@ -1063,7 +1071,7 @@ function tabMap(){
     var border=active?"var(--green)":"var(--border)";
     var bg=active?"#4ade8015":"var(--bg2)";
     var name=p?(PLANT_TYPES.find(function(t){return t.key===(p.plantType||"cannabis");}).icon+" "+esc(p.name)+(p.isPerpetual?' ♻️':"")):(locked?"— perpetual, empty —":"— empty —");
-    var sub=p?esc(p.strain||""):"Tap to assign";
+    var sub=p?esc(p.strain||""):(locked&&getQueuedSeedForZone(key)?"🌱 "+esc(getQueuedSeedForZone(key).name):"Tap to assign");
     var feedTag="";
     if(p){
       var d=daysSince(p.startDate);
@@ -1114,8 +1122,18 @@ function tabMap(){
   h+='</select>';
   h+='</div>';
   if(!sel){
+    var queuedSeed=zoneLocked?getQueuedSeedForZone(S.selectedZone):null;
     h+='<div style="font-size:13px;color:var(--text3)">'+(zoneLocked?"This pot is locked as Perpetual — the next plant you add here will auto-join the rotation.":"No plant assigned to this position.")+'</div>';
-    h+='<button onclick="patch({showAddPlant:true,newPlant:Object.assign({},S.newPlant,{position:\''+S.selectedZone+'\',isPerpetual:'+(zoneLocked)+'})})" class="btn btn-green" style="width:100%;margin-top:12px">+ Add Plant Here</button>';
+    if(queuedSeed){
+      h+='<div style="background:#4ade8015;border:1.5px solid #4ade8030;border-radius:10px;padding:10px 12px;margin-top:10px">';
+      h+='<div style="font-size:12px;color:var(--text3);margin-bottom:2px">🌱 QUEUED NEXT</div>';
+      h+='<div style="font-size:14px;font-weight:700;color:var(--green)">'+esc(queuedSeed.name)+'</div>';
+      h+='<div style="font-size:11px;color:var(--text3)">'+plantTypeLabel(queuedSeed.plantType)+' · '+queuedSeed.qty+' seed'+(queuedSeed.qty!==1?"s":"")+' left in vault</div>';
+      h+='</div>';
+      h+='<button onclick="patch({showAddPlant:true,newPlant:Object.assign({},S.newPlant,{position:\''+S.selectedZone+'\',isPerpetual:'+(zoneLocked)+',name:\''+esc(queuedSeed.name).replace(/'/g,"\\'")+'\',strain:\''+esc(queuedSeed.name).replace(/'/g,"\\'")+'\',plantType:\''+queuedSeed.plantType+'\'})})" class="btn btn-green" style="width:100%;margin-top:12px">🌱 Plant '+esc(queuedSeed.name)+'</button>';
+    }else{
+      h+='<button onclick="patch({showAddPlant:true,newPlant:Object.assign({},S.newPlant,{position:\''+S.selectedZone+'\',isPerpetual:'+(zoneLocked)+'})})" class="btn btn-green" style="width:100%;margin-top:12px">+ Add Plant Here</button>';
+    }
   }else{
     var days=daysSince(sel.startDate);
     var totalDays=plantTotalDays(sel);
@@ -1276,6 +1294,16 @@ function tabToday(){
 
 // ── NUTRIENTS TAB ────────────────────────────────────────
 function tabNutrients(){
+  var sub=S.pantrySubTab||"nutrients";
+  var h='<div style="display:flex;gap:8px;margin-bottom:14px">';
+  h+='<button onclick="patch({pantrySubTab:\'nutrients\'})" class="chip-btn'+(sub==="nutrients"?" on":"")+'" style="flex:1;margin-bottom:0;text-align:center">🧪 Nutrients</button>';
+  h+='<button onclick="patch({pantrySubTab:\'seeds\'})" class="chip-btn'+(sub==="seeds"?" on":"")+'" style="flex:1;margin-bottom:0;text-align:center">🌱 Seed Vault</button>';
+  h+='</div>';
+  if(sub==="seeds")return h+tabSeedVault();
+  return h+tabNutrientsContent();
+}
+
+function tabNutrientsContent(){
   var h='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">';
   h+='<div><div style="font-size:15px;font-weight:700;color:var(--text)">🧪 Nutrient Pantry</div><div style="font-size:12px;color:var(--text3)">Bottles you actually own — doses below use only these</div></div>';
   h+='<button onclick="patch({showAddPantry:true})" style="background:var(--green);color:#071007;border:none;border-radius:10px;padding:9px 14px;font-size:13px;font-weight:700;cursor:pointer;white-space:nowrap">+ Add</button>';
@@ -1339,6 +1367,74 @@ function tabNutrients(){
 
 function nutriBadge(name,ml,col){
   return '<div style="background:'+col+'18;border:1px solid '+col+'30;border-radius:8px;padding:3px 8px;font-size:11px;font-weight:600;color:'+col+'">'+name+' '+ml+'ml/L</div>';
+}
+
+// ── SEED VAULT ────────────────────────────────────────────
+function tabSeedVault(){
+  var h='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">';
+  h+='<div><div style="font-size:15px;font-weight:700;color:var(--text)">🌱 Seed Vault</div><div style="font-size:12px;color:var(--text3)">What you have in stock, and what\'s queued for your perpetual pots</div></div>';
+  h+='<button onclick="patch({showAddSeed:true})" style="background:var(--green);color:#071007;border:none;border-radius:10px;padding:9px 14px;font-size:13px;font-weight:700;cursor:pointer;white-space:nowrap">+ Add</button>';
+  h+='</div>';
+
+  // Queue status for each locked perpetual zone
+  var lockedZones=D.setup.perpetualZones||[];
+  if(lockedZones.length){
+    var rotation=getZoneRotation();
+    h+='<div style="font-size:13px;font-weight:700;color:var(--text);margin-bottom:8px">Perpetual Queue</div>';
+    lockedZones.forEach(function(zk){
+      var queuedSeed=getQueuedSeedForZone(zk);
+      var rot=rotation.find(function(r){return r.key===zk;});
+      var statusLabel=rot?(rot.status==="plant_now"?"🌱 Plant Now":rot.status==="waiting"?"Wait "+rot.waitDays+"d":rot.status==="growing"?rot.remaining+"d to harvest":""):"";
+      h+='<div style="background:var(--bg2);border:1.5px solid var(--border);border-radius:12px;padding:10px 14px;margin-bottom:8px">';
+      h+='<div style="display:flex;justify-content:space-between;align-items:center">';
+      h+='<div style="font-size:13px;font-weight:600;color:var(--text)">'+zoneLabel(zk)+'</div>';
+      h+='<div style="font-size:11px;color:var(--text3);font-family:\'DM Mono\',monospace">'+statusLabel+'</div>';
+      h+='</div>';
+      if(queuedSeed){
+        h+='<div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px">';
+        h+='<div style="font-size:12px;color:var(--green)">🌱 Queued: '+esc(queuedSeed.name)+'</div>';
+        h+='<button onclick="unqueueSeedFromZone(\''+zk+'\')" style="background:none;border:none;color:var(--text3);font-size:11px;text-decoration:underline;cursor:pointer">unqueue</button>';
+        h+='</div>';
+      }else{
+        h+='<div style="margin-top:6px">';
+        h+='<select onchange="if(this.value)queueSeedForZone(this.value,\''+zk+'\')" class="inp" style="font-size:12px;padding:7px 10px">';
+        h+='<option value="">— Queue a seed for this pot —</option>';
+        D.seedVault.filter(function(s){return s.qty>0&&!s.queuedZone;}).forEach(function(s){
+          h+='<option value="'+s.id+'">'+esc(s.name)+' ('+s.qty+' left)</option>';
+        });
+        h+='</select>';
+        h+='</div>';
+      }
+      h+='</div>';
+    });
+  }
+
+  // Vault inventory
+  h+='<div style="font-size:13px;font-weight:700;color:var(--text);margin:18px 0 8px">Stock</div>';
+  if(!D.seedVault.length){
+    h+='<div style="text-align:center;padding:32px 16px;color:var(--text3);background:var(--bg2);border:1.5px solid var(--border);border-radius:14px">';
+    h+='<div style="font-size:32px;margin-bottom:8px">🌱</div>';
+    h+='<div style="font-size:13px">No seeds in your vault yet — add what you have on hand.</div>';
+    h+='</div>';
+  }else{
+    D.seedVault.forEach(function(s){
+      var lowSeed=s.qty<=2;
+      h+='<div style="background:var(--bg2);border:1.5px solid var(--border);border-radius:12px;padding:12px 14px;margin-bottom:8px">';
+      h+='<div style="display:flex;justify-content:space-between;align-items:center">';
+      h+='<div><div style="font-size:14px;font-weight:700;color:var(--text)">'+esc(s.name)+'</div>';
+      h+='<div style="font-size:11px;color:var(--text3);font-family:\'DM Mono\',monospace">'+plantTypeLabel(s.plantType)+(s.queuedZone?" · queued for "+zoneLabel(s.queuedZone):"")+'</div></div>';
+      h+='<div style="display:flex;align-items:center;gap:8px">';
+      h+='<button data-sid="'+s.id+'" onclick="adjustSeedQty(this.dataset.sid,-1)" style="background:var(--bg3);border:1px solid var(--border2);border-radius:8px;width:28px;height:28px;color:var(--text);font-size:16px;cursor:pointer">−</button>';
+      h+='<div style="font-size:16px;font-weight:700;color:'+(lowSeed?"#f87171":"var(--text)")+';min-width:24px;text-align:center">'+s.qty+'</div>';
+      h+='<button data-sid="'+s.id+'" onclick="adjustSeedQty(this.dataset.sid,1)" style="background:var(--bg3);border:1px solid var(--border2);border-radius:8px;width:28px;height:28px;color:var(--text);font-size:16px;cursor:pointer">+</button>';
+      h+='<button data-sid="'+s.id+'" onclick="removeSeedFromVault(this.dataset.sid)" style="background:none;border:none;color:var(--text3);font-size:18px;cursor:pointer;padding:0 4px">×</button>';
+      h+='</div></div>';
+      if(s.notes)h+='<div style="font-size:11px;color:var(--text3);margin-top:6px">'+esc(s.notes)+'</div>';
+      if(lowSeed)h+='<div style="margin-top:6px;font-size:11px;color:#f87171;font-weight:600">⚠️ Running low — '+s.qty+' left</div>';
+      h+='</div>';
+    });
+  }
+  return h;
 }
 
 // ── PERPETUAL TAB ────────────────────────────────────────
@@ -1822,6 +1918,7 @@ function submitAddPlant(){
   var p={id:uid(),name:name,strain:strain,plantType:plantType,flowerType:flowerType,startDate:startDate,totalDays:totalDays,harvestDate:harvestDate,notes:notes,position:position,isPerpetual:isPerpetual,isCutting:isCutting,isStatic:isStatic,harvested:false};
   D.plants.push(p);
   if(!D.logs[p.id])D.logs[p.id]=[];
+  if(position)consumeQueuedSeed(position);
   saveD(D);patch({showAddPlant:false,newPlant:{name:"",strain:"",plantType:"cannabis",flowerType:"auto",startDate:tod(),totalDays:"77",harvestDate:addDays(tod(),77),notes:"",position:"",isPerpetual:false,isCutting:false}});
   showToast("🌱 "+name+" added! Happy growing!");
 }
@@ -2120,6 +2217,66 @@ function deductFromPantry(pantryId,mlUsed){
   item.remainingMl=Math.max(0,Math.round((item.remainingMl-mlUsed)*10)/10);
   saveD(D);
 }
+
+// ── Seed Vault ─────────────────────────────────────────────
+function addSeedToVault(name,plantType,qty,notes){
+  if(!name)return;
+  D.seedVault.push({
+    id:uid(),name:name,plantType:plantType||"cannabis",qty:Math.max(0,Number(qty)||1),
+    notes:notes||"",queuedZone:null
+  });
+  saveD(D);render();showToast("🌱 "+name+" added to seed vault");
+}
+function removeSeedFromVault(id){
+  var seed=D.seedVault.find(function(s){return s.id===id;});
+  if(seed&&seed.queuedZone){
+    D.setup.zoneSeedQueue=D.setup.zoneSeedQueue||{};
+    delete D.setup.zoneSeedQueue[seed.queuedZone];
+  }
+  D.seedVault=D.seedVault.filter(function(s){return s.id!==id;});
+  saveD(D);render();showToast("Removed from seed vault");
+}
+function adjustSeedQty(id,delta){
+  var seed=D.seedVault.find(function(s){return s.id===id;});
+  if(!seed)return;
+  seed.qty=Math.max(0,seed.qty+delta);
+  saveD(D);render();
+}
+function queueSeedForZone(seedId,zoneKey){
+  D.setup.zoneSeedQueue=D.setup.zoneSeedQueue||{};
+  var seed=D.seedVault.find(function(s){return s.id===seedId;});
+  if(!seed)return;
+  // If this seed was already queued somewhere else, clear that old zone's map entry
+  if(seed.queuedZone&&seed.queuedZone!==zoneKey){
+    delete D.setup.zoneSeedQueue[seed.queuedZone];
+  }
+  // If another seed was queued for this destination zone, clear its queuedZone flag too
+  var prevSeed=D.seedVault.find(function(s){return s.queuedZone===zoneKey&&s.id!==seedId;});
+  if(prevSeed)prevSeed.queuedZone=null;
+  D.seedVault.forEach(function(s){if(s.id===seedId)s.queuedZone=zoneKey;});
+  D.setup.zoneSeedQueue[zoneKey]=seedId;
+  saveD(D);render();showToast("Queued for "+zoneLabel(zoneKey));
+}
+function unqueueSeedFromZone(zoneKey){
+  D.setup.zoneSeedQueue=D.setup.zoneSeedQueue||{};
+  delete D.setup.zoneSeedQueue[zoneKey];
+  D.seedVault.forEach(function(s){if(s.queuedZone===zoneKey)s.queuedZone=null;});
+  saveD(D);render();
+}
+function getQueuedSeedForZone(zoneKey){
+  var seedId=D.setup.zoneSeedQueue&&D.setup.zoneSeedQueue[zoneKey];
+  if(!seedId)return null;
+  return D.seedVault.find(function(s){return s.id===seedId;})||null;
+}
+function consumeQueuedSeed(zoneKey){
+  var seed=getQueuedSeedForZone(zoneKey);
+  if(!seed)return;
+  seed.qty=Math.max(0,seed.qty-1);
+  seed.queuedZone=null;
+  if(D.setup.zoneSeedQueue)delete D.setup.zoneSeedQueue[zoneKey];
+  saveD(D);
+}
+
 function pantryPct(item){
   if(!item.sizeMl)return 100;
   return Math.max(0,Math.min(100,Math.round((item.remainingMl/item.sizeMl)*100)));
@@ -2148,6 +2305,51 @@ function submitAddPantry(){
     addPantryBottleFromCatalog(f.brand,bottle,sizeMl,fillPct);
   }
   patch({showAddPantry:false,pantryForm:{mode:"pack",brand:"canna_terra",bottle:"",sizeMl:1000,fillPct:100,customName:"",customMl:""}});
+}
+
+function modalAddSeed(){
+  var f=S.seedForm;
+  var h='<div class="mbg" onclick="if(event.target===this)patch({showAddSeed:false})"><div class="modal">';
+  h+='<div class="modal-handle"></div>';
+  h+='<div style="font-size:16px;font-weight:700;color:var(--text);margin-bottom:4px">🌱 Add to Seed Vault</div>';
+  h+='<div style="font-size:12px;color:var(--text3);margin-bottom:14px">What do you have in stock right now?</div>';
+
+  h+='<div style="display:flex;gap:8px;margin-bottom:12px">';
+  h+='<button onclick="patch({seedForm:Object.assign({},S.seedForm,{useRQS:true})})" class="chip-btn'+(f.useRQS?" on":"")+'" style="flex:1;margin-bottom:0;text-align:center">📋 RQS List</button>';
+  h+='<button onclick="patch({seedForm:Object.assign({},S.seedForm,{useRQS:false})})" class="chip-btn'+(!f.useRQS?" on":"")+'" style="flex:1;margin-bottom:0;text-align:center">✏️ Type My Own</button>';
+  h+='</div>';
+
+  if(f.useRQS){
+    h+='<div><div class="lbl">Strain</div><select id="sf-rqs" class="inp" onchange="patch({seedForm:Object.assign({},S.seedForm,{rqsName:this.value})})">';
+    h+='<option value="">— Select strain —</option>';
+    h+=RQS_STRAINS.map(function(s){return '<option value="'+esc(s.name)+'" '+(f.rqsName===s.name?"selected":"")+'>'+esc(s.name)+' ('+s.days+'d)</option>';}).join("");
+    h+='</select></div>';
+  }else{
+    h+='<div><div class="lbl">Seed Name</div><input id="sf-customname" class="inp" placeholder="e.g. Purple Basil, Yellow Cherry Tomato" value="'+esc(f.customName)+'"/></div>';
+  }
+
+  h+='<div style="margin-top:10px"><div class="lbl">Plant Type</div><select id="sf-plantType" class="inp">';
+  h+=PLANT_TYPES.map(function(t){return '<option value="'+t.key+'" '+(f.plantType===t.key?"selected":"")+'>'+t.label+'</option>';}).join("");
+  h+='</select></div>';
+
+  h+='<div style="margin-top:10px"><div class="lbl">How Many Seeds</div><input id="sf-qty" type="number" min="0" class="inp" value="'+f.qty+'"/></div>';
+  h+='<div style="margin-top:10px"><div class="lbl">Notes (optional)</div><textarea id="sf-notes" class="inp" rows="2" style="resize:none" placeholder="e.g. bought from local shop, freebie, etc">'+esc(f.notes)+'</textarea></div>';
+
+  h+='<button onclick="submitAddSeed()" class="btn btn-green" style="width:100%;margin-top:16px">Add to Vault</button>';
+  h+='<button onclick="patch({showAddSeed:false})" class="btn btn-outline" style="width:100%">Cancel</button>';
+  h+='</div></div>';
+  return h;
+}
+function submitAddSeed(){
+  var f=S.seedForm;
+  var name=f.useRQS?((document.getElementById("sf-rqs")||{}).value||f.rqsName):((document.getElementById("sf-customname")||{}).value||"");
+  name=(name||"").trim();
+  if(!name){showToast("Pick or type a seed name","#f87171");return;}
+  var plantType=(document.getElementById("sf-plantType")||{}).value||f.plantType;
+  var qty=(document.getElementById("sf-qty")||{}).value||f.qty;
+  var notes=(document.getElementById("sf-notes")||{}).value||"";
+  addSeedToVault(name,plantType,qty,notes);
+  patch({showAddSeed:false,seedForm:{useRQS:true,rqsName:"",customName:"",plantType:"cannabis",qty:5,notes:""}});
 }
 
 function submitTentConfig(){
