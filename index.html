@@ -1886,7 +1886,7 @@ function modalPreGrowChecklist(){
   h+='<div class="pt" style="height:7px;margin-bottom:16px"><div class="pb" style="width:'+Math.round((doneCount/PRE_GROW_CHECKLIST.length)*100)+'%;background:var(--green);height:7px"></div></div>';
   PRE_GROW_CHECKLIST.forEach(function(item){
     var checked=!!done[item.key];
-    h+='<label onclick="event.stopPropagation();toggleChecklistItem(\''+item.key+'\')" class="chip'+(checked?" on":"")+'"><input type="checkbox" '+(checked?"checked":"")+'/> '+item.icon+' '+esc(item.text)+'</label>';
+    h+='<label class="chip'+(checked?" on":"")+'"><input type="checkbox" '+(checked?"checked":"")+' onchange="toggleChecklistItem(\''+item.key+'\')" style="pointer-events:auto"/> '+item.icon+' '+esc(item.text)+'</label>';
   });
   h+='<button onclick="patch({showPreGrowChecklist:false})" class="btn btn-green" style="width:100%;margin-top:14px">Done</button>';
   h+='</div></div>';
