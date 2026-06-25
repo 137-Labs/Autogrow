@@ -92,7 +92,7 @@ var LS="autogrow-v1";
 function loadD(){
   try{var r=localStorage.getItem(LS);if(!r)return null;return JSON.parse(r);}catch(e){return null;}
 }
-function saveD(d){try{localStorage.setItem(LS,JSON.stringify(d));return true;}catch(e){if(typeof showToast==="function")showToast("⚠️ Storage full — delete some old photos to keep saving","#f87171");return false;}}
+function saveD(d){try{localStorage.setItem(LS,JSON.stringify(d));return true;}catch(e){if(typeof showToast==="function")showToast("⚠️ Storage full — try removing some old plants, logs, or seed/pantry entries to keep saving","#f87171");return false;}}
 
 // ── Photo storage (IndexedDB) ─────────────────────────────
 // Photos are too large for localStorage at any real volume, so they live in
@@ -155,6 +155,47 @@ function hydratePhotos(){
       else img.style.display="none";
     }).catch(function(){img.style.display="none";});
   });
+}
+
+function csvEscape(val){
+  if(val===null||val===undefined)return"";
+  var s=String(val);
+  if(s.indexOf(",")>-1||s.indexOf('"')>-1||s.indexOf("\n")>-1){
+    return'"'+s.replace(/"/g,'""')+'"';
+  }
+  return s;
+}
+function downloadCSV(){
+  var headers=["Plant Name","Plant Type","Strain/Variety","Tent Position","Start Date","Log Date","Day #","Height (cm)","Watered","Fed","Nutrients Used","Water Amount (L)","pH Used","Notes"];
+  var rows=[headers];
+  D.plants.forEach(function(p){
+    var plog=D.logs[p.id]||[];
+    if(!plog.length){
+      // still include a row for plants with no logs yet, so the export covers the whole vault
+      rows.push([p.name,plantTypeLabel(p.plantType).replace(/[^\w\s]/g,"").trim(),p.strain||"",zoneLabel(p.position||""),p.startDate,"","","","","","","","",""]);
+      return;
+    }
+    plog.forEach(function(l){
+      var dayNum=daysSince(p.startDate)>=0?Math.floor((new Date(l.date)-new Date(p.startDate))/86400000):"";
+      rows.push([
+        p.name,plantTypeLabel(p.plantType).replace(/[^\w\s]/g,"").trim(),p.strain||"",zoneLabel(p.position||""),
+        p.startDate,l.date,dayNum,l.height||"",l.watered?"yes":"no",l.fed?"yes":"no",
+        l.nutrient||"",l.waterAmount||"",l.phUsed||"",l.notes||""
+      ]);
+    });
+  });
+  var csvContent=rows.map(function(row){return row.map(csvEscape).join(",");}).join("\n");
+  var blob=new Blob([csvContent],{type:"text/csv;charset=utf-8"});
+  var url=URL.createObjectURL(blob);
+  var a=document.createElement("a");
+  var stamp=tod().replace(/-/g,"");
+  a.href=url;
+  a.download="autogrow-logs-"+stamp+".csv";
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(function(){URL.revokeObjectURL(url);},1000);
+  showToast("📊 CSV exported ("+(rows.length-1)+" log entries)");
 }
 
 function downloadBackup(){
@@ -636,7 +677,51 @@ var TENT_ZONES_PRESETS={
   ],
   "1z_single":[{key:"center",label:"Center"}]
 };
-function getTentZones(){return TENT_ZONES_PRESETS[D.setup.zoneLayout]||TENT_ZONES_PRESETS["5z_ushape"];}
+
+// ── Custom layout: build zones + row structure from a per-row pot-count spec ──
+// e.g. rowSpec "3,2" => 3 pots back row, 2 pots front row (auto-centered, like the U-shapes).
+// rowSpec "2,2,2" => a straight 3x2 grid. Any combination of row sizes works, 1-5 pots per row.
+function buildCustomLayout(rowSpec){
+  var counts=(rowSpec||"3,2").split(",").map(function(n){return Math.max(1,Math.min(5,parseInt(n,10)||1));});
+  var rowNames=counts.length<=2?["Back","Front"]:counts.length===3?["Back","Mid","Front"]:counts.map(function(_,i){return "Row "+(i+1);});
+  var maxCols=Math.max.apply(null,counts);
+  function colSlotsFor(n){
+    if(n===1)return["Center"];
+    if(n===2)return["Left","Right"];
+    if(n===3)return["Left","Center","Right"];
+    if(n===4)return["Left","Center-Left","Center-Right","Right"];
+    return["Left","Center-Left","Center","Center-Right","Right"];
+  }
+  var zones=[];
+  var rows=[];
+  counts.forEach(function(n,rowIdx){
+    var rowName=rowNames[rowIdx];
+    var slots=colSlotsFor(n);
+    var rowArr=new Array(maxCols).fill(null);
+    var startCol=Math.floor((maxCols-n)/2);
+    slots.forEach(function(slotName,i){
+      var key=rowName.toLowerCase().replace(/\s/g,"")+"_"+slotName.toLowerCase().replace(/[^a-z]/g,"");
+      var label=rowName+" "+slotName;
+      zones.push({key:key,label:label});
+      rowArr[startCol+i]=key;
+    });
+    rows.push(rowArr);
+  });
+  return{zones:zones,rows:rows};
+}
+function getCustomLayout(){
+  var spec=D.setup.customRowSpec||"3,2";
+  var cached=D.setup._customLayoutCache;
+  if(cached&&cached.spec===spec)return cached.layout;
+  var layout=buildCustomLayout(spec);
+  D.setup._customLayoutCache={spec:spec,layout:layout};
+  return layout;
+}
+
+function getTentZones(){
+  if(D.setup.zoneLayout==="custom")return getCustomLayout().zones;
+  return TENT_ZONES_PRESETS[D.setup.zoneLayout]||TENT_ZONES_PRESETS["5z_ushape"];
+}
 function getZonePotSize(key){
   var sizes=D.setup.zonePotSizes||{};
   return sizes[key]!==undefined?sizes[key]:(D.setup.potSize||11);
@@ -851,7 +936,7 @@ var S={
   newLog:{date:tod(),height:"",notes:"",watered:false,fed:false,photo:null},
   newFeed:{date:tod(),nutrients:[{name:"",mlPerL:""}],waterAmount:"",notes:""},
   newQuickNote:{date:tod(),notes:""},
-  showFeed:false,showQuickNote:false,showTentConfig:false,showAddPantry:false,showEditPantry:false,editingPantryId:null,showPhotoViewer:null,viewingPhotoPid:null,viewingPhotoLogId:null,showAddSeed:false,showEditSeed:false,editingSeedId:null,
+  showFeed:false,showQuickNote:false,showTentConfig:false,showAddPantry:false,showEditPantry:false,editingPantryId:null,showPhotoViewer:null,viewingPhotoPid:null,viewingPhotoLogId:null,showAddSeed:false,showEditSeed:false,editingSeedId:null,showZoneTimelapse:false,timelapseZone:null,
   pantryForm:{mode:"pack",brand:"canna_terra",bottle:"",sizeMl:1000,fillPct:100,customName:"",customMl:""},
   seedForm:{useRQS:true,rqsName:"",customName:"",plantType:"cannabis",qty:5,notes:""},
   advisorLoading:false,advisorText:"",showAdvisor:false,
@@ -909,6 +994,7 @@ function buildApp(){
   if(S.showEditSeed)h+=modalEditSeed();
   if(S.showEditPantry)h+=modalEditPantry();
   if(S.showPhotoViewer)h+=modalPhotoViewer();
+  if(S.showZoneTimelapse)h+=modalZoneTimelapse();
   if(S.showPreGrowChecklist)h+=modalPreGrowChecklist();
   if(S.showLogHistory)h+=modalLogHistory();
   if(S.showAdvisor)h+=modalAdvisor();
@@ -1078,7 +1164,8 @@ function tabMap(){
   // Layout-specific grid arrangement
   var layout=D.setup.zoneLayout;
   var rows=[];
-  if(layout==="5z_ushape")rows=[["backLeft","backCenter","backRight"],["frontLeft",null,"frontRight"]];
+  if(layout==="custom")rows=getCustomLayout().rows;
+  else if(layout==="5z_ushape")rows=[["backLeft","backCenter","backRight"],["frontLeft",null,"frontRight"]];
   else if(layout==="7z_ushape")rows=[["backLeft","backCenter","backRight"],["midLeft",null,"midRight"],["frontLeft",null,"frontRight"]];
   else if(layout==="4z_grid")rows=[["backLeft","backRight"],["frontLeft","frontRight"]];
   else if(layout==="6z_grid")rows=[["backLeft","backCenter","backRight"],["frontLeft","frontCenter","frontRight"]];
@@ -1179,6 +1266,7 @@ function tabMap(){
     if(last){
       h+='<div style="font-size:11px;color:var(--text3);margin-bottom:10px">Last entry '+last.date+': '+(last.nutrient?"🧪 "+esc(last.nutrient)+(last.mlPerL?" @"+esc(last.mlPerL)+"ml/L":""):esc(last.notes||""))+'</div>';
     }
+    h+='<button data-pid="'+sel.id+'" onclick="quickLogPlainWater(this.dataset.pid)" style="width:100%;background:#60a5fa12;border:1.5px solid #60a5fa35;border-radius:10px;padding:11px;color:#60a5fa;cursor:pointer;font-size:13px;font-weight:700;margin-bottom:8px">💧 Plain Water (matches last pH)</button>';
     h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">';
     h+='<button data-pid="'+sel.id+'" onclick="openFeed(this.dataset.pid)" style="background:#4ade8015;border:1.5px solid #4ade8030;border-radius:10px;padding:10px;color:var(--green);cursor:pointer;font-size:13px;font-weight:600">🧪 Feed / Water</button>';
     h+='<button data-pid="'+sel.id+'" onclick="openQuickNote(this.dataset.pid)" style="background:#60a5fa15;border:1.5px solid #60a5fa30;border-radius:10px;padding:10px;color:#60a5fa;cursor:pointer;font-size:13px;font-weight:600">✂️ Trim / Action</button>';
@@ -1190,6 +1278,7 @@ function tabMap(){
     h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px">';
     h+='<button data-pid="'+sel.id+'" onclick="if(confirm(\''+esc(sel.name).replace(/'/g,"\\'")+' — mark as harvested?\'))markHarvested(this.dataset.pid)" style="background:#fb923c15;border:1.5px solid #fb923c30;border-radius:10px;padding:10px;color:#fb923c;cursor:pointer;font-size:13px;font-weight:600;grid-column:1/-1">🌾 Harvest</button>';
     h+='</div>';
+    h+='<button data-zone="'+S.selectedZone+'" onclick="openZoneTimelapse(this.dataset.zone)" style="width:100%;background:var(--bg3);border:1.5px solid var(--border2);border-radius:10px;padding:10px;color:var(--text2);cursor:pointer;font-size:13px;font-weight:600;margin-bottom:8px">🎞️ Zone Timelapse</button>';
     h+='<button data-pid="'+sel.id+'" onclick="openEditPlant(this.dataset.pid)" class="btn btn-outline" style="width:100%">✏️ Edit / Reassign Position</button>';
   }
   h+='</div>';
@@ -1657,6 +1746,7 @@ function modalSetup(){
   h+='<input type="checkbox" id="s-ph" '+(s.phing?"checked":"")+' style="width:18px;height:18px;accent-color:var(--green);cursor:pointer"/>';
   h+='<label for="s-ph" style="font-size:13px;color:var(--text);cursor:pointer">I use a pH meter</label></div>';
   h+='<button onclick="saveSetup()" class="btn btn-green" style="width:100%">Save Setup</button>';
+  h+='<button onclick="downloadCSV()" style="width:100%;background:var(--bg3);border:1.5px solid var(--border2);border-radius:12px;padding:11px;color:var(--text2);font-size:14px;font-weight:600;cursor:pointer">📊 Export Logs as CSV</button>';
   h+='</div></div></div>';
   return h;
 }
@@ -1733,8 +1823,11 @@ function modalFeed(){
     h+='</div>';
   });
   h+='<button onclick="addFeedRow()" style="background:none;border:1px dashed var(--border2);border-radius:8px;padding:8px;font-size:12px;color:var(--text3);cursor:pointer">+ Add another nutrient</button>';
-  h+='<div><div class="lbl">Water Given (L)</div><input id="fd-water" type="number" step="0.1" class="inp" placeholder="e.g. 1.5" value="'+esc(f.waterAmount)+'"/></div>';
-  h+='<div><div class="lbl">Notes (optional)</div><textarea id="fd-notes" class="inp" rows="2" placeholder="pH, runoff, deficiency signs..." style="resize:none">'+esc(f.notes)+'</textarea></div>';
+  h+='<div style="display:flex;gap:10px">';
+  h+='<div style="flex:1"><div class="lbl">Water Given (L)</div><input id="fd-water" type="number" step="0.1" class="inp" placeholder="e.g. 1.5" value="'+esc(f.waterAmount)+'"/></div>';
+  h+='<div style="flex:1"><div class="lbl">pH Used</div><input id="fd-ph" type="number" step="0.1" class="inp" placeholder="'+getTargetPH(D.setup)+'" value="'+esc(f.phUsed||"")+'"/></div>';
+  h+='</div>';
+  h+='<div><div class="lbl">Notes (optional)</div><textarea id="fd-notes" class="inp" rows="2" placeholder="runoff, deficiency signs..." style="resize:none">'+esc(f.notes)+'</textarea></div>';
   h+='<button onclick="submitFeed()" class="btn btn-green" style="width:100%">Save Feed Entry</button>';
   h+='<button onclick="patch({showFeed:false})" class="btn btn-outline" style="width:100%">Cancel</button>';
   h+='</div></div></div>';
@@ -1773,14 +1866,26 @@ function modalTentConfig(){
   h+='</div>';
   h+='<div><div class="lbl">Trellis Net Height (cm from floor)</div><input id="tc-netheight" type="number" class="inp" value="'+esc(s.netHeight)+'"/></div>';
   h+='<div><div class="lbl">Pot Size (Liters)</div><input id="tc-pot" type="number" class="inp" value="'+esc(s.potSize)+'"/></div>';
-  h+='<div><div class="lbl">Number of Plants / Layout</div><select id="tc-layout" class="inp">'
+  h+='<div><div class="lbl">Number of Plants / Layout</div><select id="tc-layout" class="inp" onchange="patch({showTentConfig:true,_tcLayoutPreview:this.value})">'
     +'<option value="1z_single" '+(s.zoneLayout==="1z_single"?"selected":"")+'>1 plant — single zone</option>'
     +'<option value="4z_grid" '+(s.zoneLayout==="4z_grid"?"selected":"")+'>4 plants — 2x2 grid</option>'
     +'<option value="5z_ushape" '+(s.zoneLayout==="5z_ushape"?"selected":"")+'>5 plants — U-shape (3 back, 2 front)</option>'
     +'<option value="7z_ushape" '+(s.zoneLayout==="7z_ushape"?"selected":"")+'>7 plants — U-shape (3 back, 2 mid, 2 front)</option>'
     +'<option value="6z_grid" '+(s.zoneLayout==="6z_grid"?"selected":"")+'>6 plants — 3x2 grid</option>'
     +'<option value="9z_grid" '+(s.zoneLayout==="9z_grid"?"selected":"")+'>9 plants — 3x3 grid</option>'
+    +'<option value="custom" '+(s.zoneLayout==="custom"?"selected":"")+'>🛠️ Custom — build your own</option>'
     +'</select></div>';
+  var previewLayout=S._tcLayoutPreview||s.zoneLayout;
+  if(previewLayout==="custom"){
+    h+='<div style="background:var(--bg3);border-radius:10px;padding:12px;margin-top:-4px">';
+    h+='<div class="lbl">Pots per row, separated by commas</div>';
+    h+='<input id="tc-rowspec" class="inp" placeholder="e.g. 3,2 or 2,2,2" value="'+esc(s.customRowSpec||"3,2")+'" oninput="patch({_tcRowSpecPreview:this.value})"/>';
+    h+='<div style="font-size:11px;color:var(--text3);margin-top:6px">Each number is one row, front-to-back. "3,2" = 3 pots in back, 2 in front (U-shape). "2,2,2" = a straight 3-row grid. 1-5 pots per row, any number of rows.</div>';
+    var previewSpec=S._tcRowSpecPreview!==undefined?S._tcRowSpecPreview:(s.customRowSpec||"3,2");
+    var previewBuild=buildCustomLayout(previewSpec);
+    h+='<div style="font-size:12px;color:var(--green);margin-top:8px;font-weight:600">= '+previewBuild.zones.length+' pots total</div>';
+    h+='</div>';
+  }
   h+='<button onclick="submitTentConfig()" class="btn btn-green" style="width:100%">Save Configuration</button>';
   h+='<button onclick="patch({showTentConfig:false})" class="btn btn-outline" style="width:100%">Cancel</button>';
   h+='</div></div></div>';
@@ -1973,6 +2078,45 @@ function modalPhotoViewer(){
     h+='<button onclick="deleteCurrentPhoto()" style="background:#f8717120;border:1px solid #f8717150;border-radius:12px;padding:10px 20px;color:#f87171;font-size:13px;font-weight:600;cursor:pointer">🗑️ Delete This Photo</button>';
   }
   h+='</div>';
+  return h;
+}
+
+function openZoneTimelapse(zoneKey){
+  patch({showZoneTimelapse:true,timelapseZone:zoneKey});
+}
+function getZonePhotoTimeline(zoneKey){
+  // Every plant that has ever occupied this zone (current or past), with their photo log entries
+  var plantsInZone=D.plants.filter(function(p){return p.position===zoneKey;});
+  var entries=[];
+  plantsInZone.forEach(function(p){
+    (D.logs[p.id]||[]).filter(function(l){return l.photoId;}).forEach(function(l){
+      entries.push({date:l.date,photoId:l.photoId,plantName:p.name,logId:l.id,plantId:p.id});
+    });
+  });
+  entries.sort(function(a,b){return new Date(a.date)-new Date(b.date);});
+  return entries;
+}
+function modalZoneTimelapse(){
+  var zoneKey=S.timelapseZone;
+  var timeline=getZonePhotoTimeline(zoneKey);
+  var h='<div class="mbg" onclick="if(event.target===this)patch({showZoneTimelapse:false})"><div class="modal">';
+  h+='<div class="modal-handle"></div>';
+  h+='<div style="font-size:16px;font-weight:700;color:var(--text);margin-bottom:4px">🎞️ '+zoneLabel(zoneKey)+' Timelapse</div>';
+  h+='<div style="font-size:12px;color:var(--text3);margin-bottom:14px">'+timeline.length+' photo'+(timeline.length!==1?"s":"")+' across every plant grown in this pot</div>';
+  if(!timeline.length){
+    h+='<div style="text-align:center;padding:32px;color:var(--text3);font-size:13px">No photos logged for this pot yet.</div>';
+  }else{
+    h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">';
+    timeline.forEach(function(entry){
+      h+='<div onclick="viewPhotoFullscreen(\''+entry.photoId+'\',\''+entry.plantId+'\',\''+entry.logId+'\')" style="cursor:pointer">';
+      h+='<img data-photo-id="'+entry.photoId+'" style="width:100%;height:140px;object-fit:cover;border-radius:10px;background:var(--bg3)"/>';
+      h+='<div style="font-size:10px;color:var(--text3);margin-top:4px;font-family:\'DM Mono\',monospace">'+entry.date+' · '+esc(entry.plantName)+'</div>';
+      h+='</div>';
+    });
+    h+='</div>';
+  }
+  h+='<button onclick="patch({showZoneTimelapse:false})" class="btn btn-outline" style="width:100%;margin-top:16px">Close</button>';
+  h+='</div></div>';
   return h;
 }
 
@@ -2407,6 +2551,20 @@ function modalEditSeed(){
 }
 
 function submitTentConfig(){
+  var newLayout=(document.getElementById("tc-layout")||{}).value||D.setup.zoneLayout;
+  var rowSpecInput=document.getElementById("tc-rowspec");
+  var newRowSpec=rowSpecInput?(rowSpecInput.value||D.setup.customRowSpec||"3,2"):D.setup.customRowSpec;
+  if(newLayout!==D.setup.zoneLayout||(newLayout==="custom"&&newRowSpec!==D.setup.customRowSpec)){
+    var newZoneKeys=(newLayout==="custom"?buildCustomLayout(newRowSpec).zones:(TENT_ZONES_PRESETS[newLayout]||[])).map(function(z){return z.key;});
+    var occupiedPositions=D.plants.filter(function(p){return !p.harvested&&p.position;}).map(function(p){return p.position;});
+    var wouldOrphan=occupiedPositions.filter(function(pos){return newZoneKeys.indexOf(pos)===-1;});
+    if(wouldOrphan.length){
+      var orphanNames=D.plants.filter(function(p){return wouldOrphan.indexOf(p.position)>-1;}).map(function(p){return p.name;});
+      if(!confirm("Changing layout will unassign "+wouldOrphan.length+" plant"+(wouldOrphan.length!==1?"s":"")+" ("+orphanNames.join(", ")+") from their pots — they'll still exist, just need re-positioning. Continue?")){
+        return;
+      }
+    }
+  }
   D.setup.tentSize=(document.getElementById("tc-size")||{}).value||D.setup.tentSize;
   D.setup.lightModel=(document.getElementById("tc-light")||{}).value||D.setup.lightModel;
   D.setup.lightWatts=(document.getElementById("tc-watts")||{}).value||D.setup.lightWatts;
@@ -2414,7 +2572,9 @@ function submitTentConfig(){
   D.setup.canopyMax=(document.getElementById("tc-canopy")||{}).value||D.setup.canopyMax;
   D.setup.netHeight=(document.getElementById("tc-netheight")||{}).value||D.setup.netHeight;
   D.setup.potSize=(document.getElementById("tc-pot")||{}).value||D.setup.potSize;
-  D.setup.zoneLayout=(document.getElementById("tc-layout")||{}).value||D.setup.zoneLayout;
+  D.setup.zoneLayout=newLayout;
+  D.setup.customRowSpec=newRowSpec;
+  D.setup._customLayoutCache=null;
   saveD(D);patch({showTentConfig:false});showToast("⚙️ Tent configuration saved!");
 }
 
@@ -2477,6 +2637,7 @@ function submitFeed(){
   var date=(document.getElementById("fd-date")||{}).value||tod();
   var nutrients=readFeedRowsFromDOM().filter(function(n){return n.name||n.mlPerL;});
   var waterAmount=(document.getElementById("fd-water")||{}).value||"";
+  var phUsed=(document.getElementById("fd-ph")||{}).value||"";
   var notes=(document.getElementById("fd-notes")||{}).value||"";
   var nutrientSummary=nutrients.map(function(n){return n.name+(n.mlPerL?" @"+n.mlPerL+"ml/L":"");}).join(", ");
   var liters=Number(waterAmount)||0;
@@ -2486,8 +2647,32 @@ function submitFeed(){
     }
   });
   if(!D.logs[pid])D.logs[pid]=[];
-  D.logs[pid].push({id:uid(),date:date,height:"",watered:true,fed:true,nutrients:nutrients,nutrient:nutrientSummary,waterAmount:waterAmount,notes:notes});
+  D.logs[pid].push({id:uid(),date:date,height:"",watered:true,fed:true,nutrients:nutrients,nutrient:nutrientSummary,waterAmount:waterAmount,phUsed:phUsed,notes:notes});
   saveD(D);patch({showFeed:false});showToast("🧪 Feed logged for "+p.name);
+}
+
+function findLastPH(pid){
+  var logs=(D.logs[pid]||[]).filter(function(l){return l.phUsed;});
+  if(!logs.length)return null;
+  return logs[logs.length-1].phUsed;
+}
+function quickLogPlainWater(pid){
+  var p=D.plants.find(function(x){return x.id===pid;});if(!p)return;
+  var lastPH=findLastPH(pid);
+  var days=daysSince(p.startDate);
+  var totalDays=plantTotalDays(p);
+  var stage=getStageFor(p,days,totalDays);
+  var waterStr=getWaterSchedule(D.setup,stage,days,p);
+  var literMatch=waterStr.match(/[\d.]+L/g);
+  var estimatedLiters=literMatch&&literMatch.length?literMatch[literMatch.length-1].replace("L",""):"";
+  if(!D.logs[pid])D.logs[pid]=[];
+  D.logs[pid].push({
+    id:uid(),date:tod(),height:"",watered:true,fed:false,
+    nutrients:[],nutrient:"",waterAmount:estimatedLiters,
+    phUsed:lastPH||"",notes:"Plain water"
+  });
+  saveD(D);render();
+  showToast("💧 Plain water logged for "+p.name+(lastPH?" (pH "+lastPH+", matched last)":""));
 }
 
 function openQuickNote(pid){
