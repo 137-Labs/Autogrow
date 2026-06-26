@@ -1196,16 +1196,33 @@ function tabMap(){
   h+='</div>';
   if(!sel){
     var queuedSeed=zoneLocked?getQueuedSeedForZone(S.selectedZone):null;
-    h+='<div style="font-size:13px;color:var(--text3)">'+(zoneLocked?"This pot is locked as Perpetual — the next plant you add here will auto-join the rotation.":"No plant assigned to this position.")+'</div>';
-    if(queuedSeed){
-      h+='<div style="background:#4ade8015;border:1.5px solid #4ade8030;border-radius:10px;padding:10px 12px;margin-top:10px">';
-      h+='<div style="font-size:12px;color:var(--text3);margin-bottom:2px">🌱 QUEUED NEXT</div>';
-      h+='<div style="font-size:14px;font-weight:700;color:var(--green)">'+esc(queuedSeed.name)+'</div>';
-      h+='<div style="font-size:11px;color:var(--text3)">'+plantTypeLabel(queuedSeed.plantType)+' · '+queuedSeed.qty+' seed'+(queuedSeed.qty!==1?"s":"")+' left in vault</div>';
+    h+='<div style="font-size:13px;color:var(--text3);margin-bottom:10px">'+(zoneLocked?"This pot is locked as Perpetual — the next plant you add here will auto-join the rotation.":"No plant assigned to this position.")+'</div>';
+    if(zoneLocked){
+      var availableSeeds=D.seedVault.filter(function(s){return s.qty>0&&(!s.queuedZone||s.queuedZone===S.selectedZone);});
+      h+='<div style="margin-bottom:10px">';
+      h+='<div style="font-size:11px;color:var(--text3);margin-bottom:6px">🌱 Seed queued for this pot:</div>';
+      h+='<select onchange="if(this.value)queueSeedForZone(this.value,\''+S.selectedZone+'\');else unqueueSeedFromZone(\''+S.selectedZone+'\');" class="inp" style="font-size:13px">';
+      h+='<option value="">— None queued —</option>';
+      availableSeeds.forEach(function(s){
+        h+='<option value="'+s.id+'" '+(queuedSeed&&queuedSeed.id===s.id?"selected":"")+'>'+esc(s.name)+' ('+plantTypeLabel(s.plantType)+', '+s.qty+' left)</option>';
+      });
+      h+='</select>';
+      if(!availableSeeds.length){
+        h+='<div style="font-size:11px;color:var(--text3);margin-top:6px">Your seed vault is empty — <span onclick="patch({tab:\'nutrients\',pantrySubTab:\'seeds\',showAddSeed:true})" style="color:var(--green);text-decoration:underline;cursor:pointer">add seeds</span> to queue one here.</div>';
+      }
       h+='</div>';
-      h+='<button onclick="patch({showAddPlant:true,newPlant:Object.assign({},S.newPlant,{position:\''+S.selectedZone+'\',isPerpetual:'+(zoneLocked)+',name:\''+esc(queuedSeed.name).replace(/'/g,"\\'")+'\',strain:\''+esc(queuedSeed.name).replace(/'/g,"\\'")+'\',plantType:\''+queuedSeed.plantType+'\'})})" class="btn btn-green" style="width:100%;margin-top:12px">🌱 Plant '+esc(queuedSeed.name)+'</button>';
+    }
+    if(queuedSeed){
+      h+='<div style="background:#4ade8015;border:1.5px solid #4ade8030;border-radius:10px;padding:10px 12px;margin-bottom:10px">';
+      h+='<div style="display:flex;justify-content:space-between;align-items:flex-start">';
+      h+='<div><div style="font-size:12px;color:var(--text3);margin-bottom:2px">🌱 QUEUED NEXT</div>';
+      h+='<div style="font-size:14px;font-weight:700;color:var(--green)">'+esc(queuedSeed.name)+'</div>';
+      h+='<div style="font-size:11px;color:var(--text3)">'+plantTypeLabel(queuedSeed.plantType)+' · '+queuedSeed.qty+' seed'+(queuedSeed.qty!==1?"s":"")+' left in vault</div></div>';
+      h+='<span data-sid="'+queuedSeed.id+'" onclick="openEditSeed(this.dataset.sid)" style="font-size:16px;cursor:pointer;color:var(--text3)">✏️</span>';
+      h+='</div></div>';
+      h+='<button onclick="patch({showAddPlant:true,newPlant:Object.assign({},S.newPlant,{position:\''+S.selectedZone+'\',isPerpetual:'+(zoneLocked)+',name:\''+esc(queuedSeed.name).replace(/'/g,"\\'")+'\',strain:\''+esc(queuedSeed.name).replace(/'/g,"\\'")+'\',plantType:\''+queuedSeed.plantType+'\'})})" class="btn btn-green" style="width:100%">🌱 Plant '+esc(queuedSeed.name)+'</button>';
     }else{
-      h+='<button onclick="patch({showAddPlant:true,newPlant:Object.assign({},S.newPlant,{position:\''+S.selectedZone+'\',isPerpetual:'+(zoneLocked)+'})})" class="btn btn-green" style="width:100%;margin-top:12px">+ Add Plant Here</button>';
+      h+='<button onclick="patch({showAddPlant:true,newPlant:Object.assign({},S.newPlant,{position:\''+S.selectedZone+'\',isPerpetual:'+(zoneLocked)+'})})" class="btn btn-green" style="width:100%">+ Add Plant Here</button>';
     }
   }else{
     var days=daysSince(sel.startDate);
