@@ -338,6 +338,7 @@ function handleRestoreFile(input){
     if(!D.seedVault)D.seedVault=[];
     if(!D.dryingRack)D.dryingRack=[];
     if(!D.harvestInventory)D.harvestInventory=[];
+    if(!D.germinationLog)D.germinationLog=[];
     if(!D.setup)D.setup={};
     if(!D.setup.perpetualZones)D.setup.perpetualZones=[];
     if(!D.setup.zonePotSizes)D.setup.zonePotSizes={};
@@ -980,6 +981,7 @@ var D=loadD()||{
   seedVault:[],
   dryingRack:[],
   harvestInventory:[],
+  germinationLog:[],
   setup:{
     tentSize:"70x70",lightModel:"Mars Hydro FC1500",lightWatts:"150",
     lightSchedule:"18/6",medium:"soil",potSize:"11",phing:false,
@@ -1001,12 +1003,14 @@ if(!D.setup.perpetualZones)D.setup.perpetualZones=[];
 if(!D.setup.zonePotSizes)D.setup.zonePotSizes={};
 if(!D.setup.electricityRate)D.setup.electricityRate="0.33";
 if(!D.setup.theme)D.setup.theme="green";
+if(D.plants.length>0&&D.setup.onboardingDone===undefined)D.setup.onboardingDone=true;
 if(!D.setup.vpdLeafOffset)D.setup.vpdLeafOffset="1.5";
 if(!D.pantry)D.pantry=[];
 if(!D.checklistDone)D.checklistDone={};
 if(!D.seedVault)D.seedVault=[];
 if(!D.dryingRack)D.dryingRack=[];
 if(!D.harvestInventory)D.harvestInventory=[];
+if(!D.germinationLog)D.germinationLog=[];
 
 // One-time migration: move any old-style embedded base64 photos (l.photo)
 // into IndexedDB and replace with a photoId reference. Runs once per legacy
@@ -1031,6 +1035,8 @@ if(!D.harvestInventory)D.harvestInventory=[];
 
 var S={
   tab:"map",
+  onboardStep:1,
+  onboardData:{spaceName:"My Grow",cropType:"cannabis",rowSpec:"3,2",tentSize:"70x70",potSize:"11"},
   showAddPlant:false,showPreGrowChecklist:false,showLogHistory:false,editingLogId:null,
   showEditPlant:false,
   showSetup:false,
@@ -1044,7 +1050,7 @@ var S={
   newQuickNote:{date:tod(),notes:""},
   showFeed:false,showQuickNote:false,showTentConfig:false,showAddPantry:false,showEditPantry:false,editingPantryId:null,showPhotoViewer:null,viewingPhotoPid:null,viewingPhotoLogId:null,showAddSeed:false,showEditSeed:false,editingSeedId:null,showZoneTimelapse:false,timelapseZone:null,showHarvestChoice:false,harvestingPlantId:null,showJarCure:false,jarCureRackId:null,
   pantryForm:{mode:"pack",brand:"canna_terra",bottle:"",sizeMl:1000,fillPct:100,customName:"",customMl:""},
-  seedForm:{useRQS:true,rqsName:"",customName:"",plantType:"cannabis",qty:5,notes:""},
+  seedForm:{useRQS:true,rqsName:"",customName:"",plantType:"cannabis",qty:5,notes:"",breeder:"",purchaseDate:""},
   advisorLoading:false,advisorText:"",showAdvisor:false,
   selectedZone:"backCenter"
 };
@@ -1059,7 +1065,111 @@ function render(){
   hydratePhotos();
 }
 
+// Resolves any "pending" germination log entries: if the plant survived past
+// seedling (still growing or already harvested), it's a success. If the plant
+// no longer exists (deleted) and was never resolved, it's left pending —
+// deletePlant() handles asking the user directly in that case.
+function resolveGerminationOutcomes(){
+  var changed=false;
+  D.germinationLog.forEach(function(g){
+    if(g.outcome!=="pending")return;
+    var p=D.plants.find(function(x){return x.id===g.plantId;});
+    if(!p)return; // plant deleted — deletePlant() resolves this case itself
+    var days=daysSince(p.startDate);
+    var totalDays=plantTotalDays(p);
+    var stage=getStageFor(p,days,totalDays);
+    var pastSeedling=stage.key!=="seed"&&stage.key!=="seedling"&&stage.key!=="rooting";
+    if(p.harvested||pastSeedling){
+      g.outcome="success";
+      changed=true;
+    }
+  });
+  if(changed)saveD(D);
+}
+
+function buildOnboarding(){
+  var step=S.onboardStep||1;
+  var od=S.onboardData;
+  var h='<div style="min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px;max-width:480px;margin:0 auto">';
+
+  // Progress dots
+  h+='<div style="display:flex;gap:6px;margin-bottom:28px">';
+  for(var i=1;i<=4;i++){
+    h+='<div style="width:'+(i===step?"24px":"8px")+';height:8px;border-radius:4px;background:'+(i<=step?"var(--green)":"var(--border2)")+';transition:width .2s"></div>';
+  }
+  h+='</div>';
+
+  if(step===1){
+    h+='<div style="font-size:48px;margin-bottom:16px">🌿</div>';
+    h+='<div style="font-size:22px;font-weight:700;color:var(--text);margin-bottom:8px;text-align:center">Welcome to AutoGrow</div>';
+    h+='<div style="font-size:14px;color:var(--text3);text-align:center;margin-bottom:32px;line-height:1.5">A private, offline seed-to-harvest tracker for cannabis, tomatoes, and basil. Everything stays on this device — no accounts, no cloud.</div>';
+    h+='<button onclick="patch({onboardStep:2})" class="btn btn-green" style="width:100%">+ Set Up Your First Grow Space</button>';
+  }
+
+  else if(step===2){
+    h+='<div style="font-size:18px;font-weight:700;color:var(--text);margin-bottom:4px;text-align:center">Name your space</div>';
+    h+='<div style="font-size:13px;color:var(--text3);margin-bottom:24px;text-align:center">What do you call your grow setup?</div>';
+    h+='<div style="width:100%;margin-bottom:24px"><input id="ob-name" class="inp" placeholder="e.g. My Grow, Tent 1" value="'+esc(od.spaceName)+'" style="font-size:16px;text-align:center;padding:14px"/></div>';
+    h+='<div style="display:flex;gap:10px;width:100%">';
+    h+='<button onclick="patch({onboardStep:1})" class="btn btn-outline" style="flex:1">Back</button>';
+    h+='<button onclick="var v=document.getElementById(\'ob-name\').value.trim();patch({onboardData:Object.assign({},S.onboardData,{spaceName:v||S.onboardData.spaceName}),onboardStep:3})" class="btn btn-green" style="flex:2">Continue</button>';
+    h+='</div>';
+  }
+
+  else if(step===3){
+    h+='<div style="font-size:18px;font-weight:700;color:var(--text);margin-bottom:4px;text-align:center">What are you growing?</div>';
+    h+='<div style="font-size:13px;color:var(--text3);margin-bottom:24px;text-align:center">This sets up the right nutrient charts and lifecycle tracking.</div>';
+    h+='<div style="display:flex;flex-direction:column;gap:10px;width:100%;margin-bottom:24px">';
+    PLANT_TYPES.forEach(function(t){
+      if(t.key==="other")return;
+      var active=od.cropType===t.key;
+      h+='<button onclick="patch({onboardData:Object.assign({},S.onboardData,{cropType:\''+t.key+'\'})})" class="chip-btn'+(active?" on":"")+'" style="text-align:left;padding:14px">'+t.label+'<div style="font-size:11px;color:var(--text3);font-weight:400;margin-top:2px">'+esc(t.desc)+'</div></button>';
+    });
+    h+='</div>';
+    h+='<div style="display:flex;gap:10px;width:100%">';
+    h+='<button onclick="patch({onboardStep:2})" class="btn btn-outline" style="flex:1">Back</button>';
+    h+='<button onclick="patch({onboardStep:4})" class="btn btn-green" style="flex:2">Continue</button>';
+    h+='</div>';
+  }
+
+  else if(step===4){
+    h+='<div style="font-size:18px;font-weight:700;color:var(--text);margin-bottom:4px;text-align:center">Set up your space</div>';
+    h+='<div style="font-size:13px;color:var(--text3);margin-bottom:20px;text-align:center">Pots per row, separated by commas. "3,2" = 3 in back, 2 in front.</div>';
+    h+='<div style="width:100%;margin-bottom:14px"><input id="ob-rowspec" class="inp" placeholder="3,2" value="'+esc(od.rowSpec)+'" style="font-size:16px;text-align:center;padding:14px" oninput="patch({onboardData:Object.assign({},S.onboardData,{rowSpec:this.value})})"/></div>';
+    var preview=buildCustomLayout(od.rowSpec);
+    h+='<div style="font-size:13px;color:var(--green);font-weight:600;margin-bottom:20px">= '+preview.zones.length+' pot'+(preview.zones.length!==1?"s":"")+' total</div>';
+    h+='<div style="display:flex;gap:10px;width:100%;margin-bottom:10px">';
+    h+='<div style="flex:1"><div class="lbl">Tent Size (cm)</div><input id="ob-tent" class="inp" placeholder="70x70" value="'+esc(od.tentSize)+'" oninput="patch({onboardData:Object.assign({},S.onboardData,{tentSize:this.value})})"/></div>';
+    h+='<div style="flex:1"><div class="lbl">Default Pot Size (L)</div><input id="ob-pot" type="number" class="inp" placeholder="11" value="'+esc(od.potSize)+'" oninput="patch({onboardData:Object.assign({},S.onboardData,{potSize:this.value})})"/></div>';
+    h+='</div>';
+    h+='<div style="display:flex;gap:10px;width:100%;margin-top:14px">';
+    h+='<button onclick="patch({onboardStep:3})" class="btn btn-outline" style="flex:1">Back</button>';
+    h+='<button onclick="completeOnboarding()" class="btn btn-green" style="flex:2">🌱 Start Growing</button>';
+    h+='</div>';
+  }
+
+  h+='</div>';
+  return h;
+}
+
+function completeOnboarding(){
+  var od=S.onboardData;
+  D.setup.tentSize=od.tentSize||"70x70";
+  D.setup.potSize=od.potSize||"11";
+  D.setup.zoneLayout="custom";
+  D.setup.customRowSpec=od.rowSpec||"3,2";
+  D.setup._customLayoutCache=null;
+  D.setup.spaceName=od.spaceName||"My Grow";
+  D.setup.onboardingDone=true;
+  saveD(D);
+  patch({tab:"map",onboardStep:1});
+  showToast("🌿 "+D.setup.spaceName+" is ready — tap a pot to add your first plant");
+}
+
 function buildApp(){
+  if(D.plants.length===0&&!D.setup.onboardingDone){
+    return buildOnboarding();
+  }
   var h="";
   // Header
   h+='<div style="padding:14px 16px 10px;background:var(--bg2);border-bottom:1px solid var(--border2);display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:100">';
@@ -1502,14 +1612,48 @@ function tabToday(){
 // ── NUTRIENTS TAB ────────────────────────────────────────
 function tabNutrients(){
   var sub=S.pantrySubTab||"nutrients";
-  var h='<div style="display:flex;gap:6px;margin-bottom:14px">';
-  h+='<button onclick="patch({pantrySubTab:\'nutrients\'})" class="chip-btn'+(sub==="nutrients"?" on":"")+'" style="flex:1;margin-bottom:0;text-align:center;padding:9px 6px;font-size:12px">🧪 Nutrients</button>';
-  h+='<button onclick="patch({pantrySubTab:\'seeds\'})" class="chip-btn'+(sub==="seeds"?" on":"")+'" style="flex:1;margin-bottom:0;text-align:center;padding:9px 6px;font-size:12px">🌱 Seeds</button>';
-  h+='<button onclick="patch({pantrySubTab:\'drying\'})" class="chip-btn'+(sub==="drying"?" on":"")+'" style="flex:1;margin-bottom:0;text-align:center;padding:9px 6px;font-size:12px">🌬️ Drying'+(D.dryingRack.length?" ("+D.dryingRack.length+")":"")+'</button>';
+  var h='<div style="display:flex;gap:5px;margin-bottom:14px;flex-wrap:wrap">';
+  h+='<button onclick="patch({pantrySubTab:\'nutrients\'})" class="chip-btn'+(sub==="nutrients"?" on":"")+'" style="flex:1;margin-bottom:0;text-align:center;padding:9px 4px;font-size:11px">🧪 Nutrients</button>';
+  h+='<button onclick="patch({pantrySubTab:\'seeds\'})" class="chip-btn'+(sub==="seeds"?" on":"")+'" style="flex:1;margin-bottom:0;text-align:center;padding:9px 4px;font-size:11px">🌱 Seeds</button>';
+  h+='<button onclick="patch({pantrySubTab:\'drying\'})" class="chip-btn'+(sub==="drying"?" on":"")+'" style="flex:1;margin-bottom:0;text-align:center;padding:9px 4px;font-size:11px">🌬️ Drying'+(D.dryingRack.length?" ("+D.dryingRack.length+")":"")+'</button>';
+  h+='<button onclick="patch({pantrySubTab:\'cured\'})" class="chip-btn'+(sub==="cured"?" on":"")+'" style="flex:1;margin-bottom:0;text-align:center;padding:9px 4px;font-size:11px">🫙 Cured'+(D.harvestInventory.length?" ("+D.harvestInventory.length+")":"")+'</button>';
   h+='</div>';
   if(sub==="seeds")return h+tabSeedVault();
   if(sub==="drying")return h+tabDryingRack();
+  if(sub==="cured")return h+tabCuredInventory();
   return h+tabNutrientsContent();
+}
+
+function tabCuredInventory(){
+  var h='<div style="font-size:15px;font-weight:700;color:var(--text);margin-bottom:4px">🫙 Cured Inventory</div>';
+  h+='<div style="font-size:12px;color:var(--text3);margin-bottom:14px">What\'s finished, jarred, and ready on hand</div>';
+  if(!D.harvestInventory.length){
+    h+='<div style="text-align:center;padding:32px 16px;color:var(--text3);background:var(--bg2);border:1.5px solid var(--border);border-radius:14px">';
+    h+='<div style="font-size:32px;margin-bottom:8px">🫙</div>';
+    h+='<div style="font-size:13px">Nothing jarred yet — finish a Drying Rack batch or harvest direct to fill this.</div>';
+    h+='</div>';
+    return h;
+  }
+  var totalWeight=D.harvestInventory.reduce(function(sum,inv){return sum+(Number(inv.weight)||0);},0);
+  if(totalWeight>0){
+    h+='<div style="background:var(--green)10;border:1.5px solid var(--green)25;border-radius:14px;padding:12px 14px;margin-bottom:14px">';
+    h+='<div style="font-size:11px;color:var(--green);font-weight:600">TOTAL ON HAND</div>';
+    h+='<div style="font-size:22px;font-weight:800;color:var(--text)">'+Math.round(totalWeight*10)/10+'g</div>';
+    h+='</div>';
+  }
+  D.harvestInventory.slice().reverse().forEach(function(inv){
+    h+='<div style="background:var(--bg2);border:1.5px solid var(--border);border-radius:12px;padding:12px 14px;margin-bottom:8px">';
+    h+='<div style="display:flex;justify-content:space-between;align-items:flex-start">';
+    h+='<div><div style="font-size:14px;font-weight:700;color:var(--text)">'+esc(inv.name)+'</div>';
+    h+='<div style="font-size:11px;color:var(--text3);font-family:\'DM Mono\',monospace">'+esc(inv.strain||"")+' · '+plantTypeLabel(inv.plantType)+'</div>';
+    h+='<div style="font-size:11px;color:var(--text3);margin-top:2px">Harvested '+inv.harvestedOn+(inv.driedOn?" · Cured "+inv.driedOn:"")+'</div></div>';
+    h+='<div style="text-align:right"><div style="font-size:18px;font-weight:800;color:var(--green)">'+(inv.weight?inv.weight+"g":"—")+'</div>';
+    h+='<button data-iid="'+inv.id+'" onclick="removeCuredInventory(this.dataset.iid)" style="background:none;border:none;color:var(--text3);font-size:11px;text-decoration:underline;cursor:pointer;margin-top:2px">used up</button></div>';
+    h+='</div>';
+    if(inv.notes)h+='<div style="font-size:11px;color:var(--text2);margin-top:6px">'+esc(inv.notes)+'</div>';
+    h+='</div>';
+  });
+  return h;
 }
 
 function tabDryingRack(){
@@ -1543,15 +1687,7 @@ function tabDryingRack(){
   }
 
   if(D.harvestInventory.length){
-    h+='<div style="font-size:13px;font-weight:700;color:var(--text);margin:18px 0 8px">📦 Inventory ('+D.harvestInventory.length+')</div>';
-    D.harvestInventory.slice().reverse().forEach(function(inv){
-      h+='<div style="background:var(--bg2);border:1.5px solid var(--border);border-radius:12px;padding:10px 14px;margin-bottom:6px">';
-      h+='<div style="display:flex;justify-content:space-between;align-items:center">';
-      h+='<div><div style="font-size:13px;font-weight:600;color:var(--text)">'+esc(inv.name)+'</div>';
-      h+='<div style="font-size:11px;color:var(--text3)">'+esc(inv.strain||"")+' · harvested '+inv.harvestedOn+(inv.driedOn?" · dried "+inv.driedOn:"")+'</div></div>';
-      h+='<div style="font-size:14px;font-weight:700;color:var(--green)">'+(inv.weight?inv.weight+"g":"—")+'</div>';
-      h+='</div></div>';
-    });
+    h+='<div onclick="patch({pantrySubTab:\'cured\'})" style="margin-top:18px;background:var(--bg3);border:1.5px solid var(--border2);border-radius:12px;padding:12px 14px;cursor:pointer;font-size:13px;color:var(--text2);text-align:center">🫙 View Cured Inventory ('+D.harvestInventory.length+') →</div>';
   }
   return h;
 }
@@ -1623,6 +1759,13 @@ function nutriBadge(name,ml,col){
 }
 
 // ── SEED VAULT ────────────────────────────────────────────
+function getGerminationRate(strain){
+  var attempts=D.germinationLog.filter(function(g){return g.strain===strain&&g.outcome!=="pending";});
+  if(!attempts.length)return null;
+  var successes=attempts.filter(function(g){return g.outcome==="success";}).length;
+  return{rate:Math.round((successes/attempts.length)*100),total:attempts.length,successes:successes};
+}
+
 function tabSeedVault(){
   var h='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">';
   h+='<div><div style="font-size:15px;font-weight:700;color:var(--text)">🌱 Seed Vault</div><div style="font-size:12px;color:var(--text3)">What you have in stock, and what\'s queued for your perpetual pots</div></div>';
@@ -1672,16 +1815,20 @@ function tabSeedVault(){
   }else{
     D.seedVault.forEach(function(s){
       var lowSeed=s.qty<=2;
+      var germ=getGerminationRate(s.name);
       h+='<div style="background:var(--bg2);border:1.5px solid var(--border);border-radius:12px;padding:12px 14px;margin-bottom:8px">';
       h+='<div style="display:flex;justify-content:space-between;align-items:center">';
       h+='<div><div data-sid="'+s.id+'" onclick="openEditSeed(this.dataset.sid)" style="font-size:14px;font-weight:700;color:var(--text);cursor:pointer">'+esc(s.name)+' <span style="font-size:11px;color:var(--text3);font-weight:400">✏️</span></div>';
-      h+='<div style="font-size:11px;color:var(--text3);font-family:\'DM Mono\',monospace">'+plantTypeLabel(s.plantType)+(s.queuedZone?" · queued for "+zoneLabel(s.queuedZone):"")+'</div></div>';
+      h+='<div style="font-size:11px;color:var(--text3);font-family:\'DM Mono\',monospace">'+(s.breeder?esc(s.breeder)+" · ":"")+plantTypeLabel(s.plantType)+(s.queuedZone?" · queued for "+zoneLabel(s.queuedZone):"")+'</div>';
+      if(s.purchaseDate)h+='<div style="font-size:10px;color:var(--text3)">bought '+s.purchaseDate+'</div>';
+      h+='</div>';
       h+='<div style="display:flex;align-items:center;gap:8px">';
       h+='<button data-sid="'+s.id+'" onclick="adjustSeedQty(this.dataset.sid,-1)" style="background:var(--bg3);border:1px solid var(--border2);border-radius:8px;width:28px;height:28px;color:var(--text);font-size:16px;cursor:pointer">−</button>';
       h+='<div style="font-size:16px;font-weight:700;color:'+(lowSeed?"#f87171":"var(--text)")+';min-width:24px;text-align:center">'+s.qty+'</div>';
       h+='<button data-sid="'+s.id+'" onclick="adjustSeedQty(this.dataset.sid,1)" style="background:var(--bg3);border:1px solid var(--border2);border-radius:8px;width:28px;height:28px;color:var(--text);font-size:16px;cursor:pointer">+</button>';
       h+='<button data-sid="'+s.id+'" onclick="removeSeedFromVault(this.dataset.sid)" style="background:none;border:none;color:var(--text3);font-size:18px;cursor:pointer;padding:0 4px">×</button>';
       h+='</div></div>';
+      if(germ)h+='<div style="margin-top:6px;font-size:11px;color:'+(germ.rate>=70?"var(--green)":germ.rate>=40?"#facc15":"#f87171")+'">🌱 '+germ.rate+'% germination success ('+germ.successes+'/'+germ.total+' planted)</div>';
       if(s.notes)h+='<div style="font-size:11px;color:var(--text3);margin-top:6px">'+esc(s.notes)+'</div>';
       if(lowSeed)h+='<div style="margin-top:6px;font-size:11px;color:#f87171;font-weight:600">⚠️ Running low — '+s.qty+' left</div>';
       h+='</div>';
@@ -2330,6 +2477,9 @@ function submitAddPlant(){
   D.plants.push(p);
   if(!D.logs[p.id])D.logs[p.id]=[];
   if(position)consumeQueuedSeed(position);
+  if(strain&&!isCutting){
+    D.germinationLog.push({id:uid(),plantId:p.id,strain:strain,plantType:plantType,plantedOn:startDate,outcome:"pending"});
+  }
   saveD(D);patch({showAddPlant:false,newPlant:{name:"",strain:"",plantType:"cannabis",flowerType:"auto",startDate:tod(),totalDays:"77",harvestDate:addDays(tod(),77),notes:"",position:"",isPerpetual:false,isCutting:false}});
   showToast("🌱 "+name+" added! Happy growing!");
 }
@@ -2604,6 +2754,11 @@ function removeFromDryingRack(rackId){
   D.dryingRack=D.dryingRack.filter(function(r){return r.id!==rackId;});
   saveD(D);render();
 }
+function removeCuredInventory(invId){
+  if(!confirm("Mark this as used up and remove from inventory?"))return;
+  D.harvestInventory=D.harvestInventory.filter(function(i){return i.id!==invId;});
+  saveD(D);render();showToast("Removed from inventory");
+}
 
 function togglePerpetual(pid){
   var p=D.plants.find(function(x){return x.id===pid;});if(!p)return;
@@ -2706,11 +2861,11 @@ function deductFromPantry(pantryId,mlUsed){
 }
 
 // ── Seed Vault ─────────────────────────────────────────────
-function addSeedToVault(name,plantType,qty,notes){
+function addSeedToVault(name,plantType,qty,notes,breeder,purchaseDate){
   if(!name)return;
   D.seedVault.push({
     id:uid(),name:name,plantType:plantType||"cannabis",qty:Math.max(0,Number(qty)||1),
-    notes:notes||"",queuedZone:null
+    notes:notes||"",queuedZone:null,breeder:breeder||"",purchaseDate:purchaseDate||""
   });
   saveD(D);render();showToast("🌱 "+name+" added to seed vault");
 }
@@ -2739,10 +2894,14 @@ function submitEditSeed(){
   var plantType=(document.getElementById("es-plantType")||{}).value||seed.plantType;
   var qty=(document.getElementById("es-qty")||{}).value;
   var notes=(document.getElementById("es-notes")||{}).value||"";
+  var breeder=(document.getElementById("es-breeder")||{}).value||"";
+  var purchaseDate=(document.getElementById("es-purchasedate")||{}).value||"";
   seed.name=name.trim()||seed.name;
   seed.plantType=plantType;
   seed.qty=Math.max(0,Number(qty)||0);
   seed.notes=notes;
+  seed.breeder=breeder;
+  seed.purchaseDate=purchaseDate;
   saveD(D);patch({showEditSeed:false,editingSeedId:null});showToast("✏️ "+seed.name+" updated");
 }
 function queueSeedForZone(seedId,zoneKey){
@@ -2836,6 +2995,10 @@ function modalAddSeed(){
   h+='</select></div>';
 
   h+='<div style="margin-top:10px"><div class="lbl">How Many Seeds</div><input id="sf-qty" type="number" min="0" class="inp" value="'+f.qty+'"/></div>';
+  h+='<div style="display:flex;gap:10px;margin-top:10px">';
+  h+='<div style="flex:1"><div class="lbl">Breeder/Brand (optional)</div><input id="sf-breeder" class="inp" placeholder="e.g. Royal Queen Seeds" value="'+esc(f.breeder||"")+'"/></div>';
+  h+='<div style="flex:1"><div class="lbl">Purchase Date</div><input id="sf-purchasedate" type="date" class="inp" value="'+esc(f.purchaseDate||"")+'"/></div>';
+  h+='</div>';
   h+='<div style="margin-top:10px"><div class="lbl">Notes (optional)</div><textarea id="sf-notes" class="inp" rows="2" style="resize:none" placeholder="e.g. bought from local shop, freebie, etc">'+esc(f.notes)+'</textarea></div>';
 
   h+='<button onclick="submitAddSeed()" class="btn btn-green" style="width:100%;margin-top:16px">Add to Vault</button>';
@@ -2851,8 +3014,10 @@ function submitAddSeed(){
   var plantType=(document.getElementById("sf-plantType")||{}).value||f.plantType;
   var qty=(document.getElementById("sf-qty")||{}).value||f.qty;
   var notes=(document.getElementById("sf-notes")||{}).value||"";
-  addSeedToVault(name,plantType,qty,notes);
-  patch({showAddSeed:false,seedForm:{useRQS:true,rqsName:"",customName:"",plantType:"cannabis",qty:5,notes:""}});
+  var breeder=(document.getElementById("sf-breeder")||{}).value||"";
+  var purchaseDate=(document.getElementById("sf-purchasedate")||{}).value||"";
+  addSeedToVault(name,plantType,qty,notes,breeder,purchaseDate);
+  patch({showAddSeed:false,seedForm:{useRQS:true,rqsName:"",customName:"",plantType:"cannabis",qty:5,notes:"",breeder:"",purchaseDate:""}});
 }
 
 function modalEditSeed(){
@@ -2867,6 +3032,8 @@ function modalEditSeed(){
   h+=PLANT_TYPES.map(function(t){return '<option value="'+t.key+'" '+(seed.plantType===t.key?"selected":"")+'>'+t.label+'</option>';}).join("");
   h+='</select></div>';
   h+='<div><div class="lbl">Quantity</div><input id="es-qty" type="number" min="0" class="inp" value="'+seed.qty+'"/></div>';
+  h+='<div><div class="lbl">Breeder/Brand</div><input id="es-breeder" class="inp" value="'+esc(seed.breeder||"")+'"/></div>';
+  h+='<div><div class="lbl">Purchase Date</div><input id="es-purchasedate" type="date" class="inp" value="'+esc(seed.purchaseDate||"")+'"/></div>';
   h+='<div><div class="lbl">Notes</div><textarea id="es-notes" class="inp" rows="2" style="resize:none">'+esc(seed.notes||"")+'</textarea></div>';
   h+='<button onclick="submitEditSeed()" class="btn btn-green" style="width:100%">Save</button>';
   h+='<button data-sid="'+seed.id+'" onclick="removeSeedFromVault(this.dataset.sid);patch({showEditSeed:false})" style="background:none;border:1px solid #f8717140;border-radius:12px;padding:11px;color:#f87171;font-size:14px;font-weight:600;cursor:pointer">Remove from Vault</button>';
@@ -3038,6 +3205,14 @@ function submitEditPlant(){
 }
 
 function deletePlant(pid){
+  var pendingGerm=D.germinationLog.find(function(g){return g.plantId===pid&&g.outcome==="pending";});
+  if(pendingGerm){
+    if(confirm("Did "+pendingGerm.strain+" fail to germinate or die early? (This only affects your germination success stats, not the plant record.)")){
+      pendingGerm.outcome="failed";
+    }else{
+      pendingGerm.outcome="success";
+    }
+  }
   var logsToClean=D.logs[pid]||[];
   logsToClean.forEach(function(l){if(l.photoId)deletePhotoBlob(l.photoId);});
   D.plants=D.plants.filter(function(p){return p.id!==pid;});
@@ -3082,6 +3257,7 @@ async function runAdvisor(){
   }
 }
 
+resolveGerminationOutcomes();
 render();
 
 // ── PWA setup: installable "Add to Home Screen" via inline manifest ──
