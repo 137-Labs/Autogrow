@@ -16,17 +16,11 @@ A minimalist, privacy-first, offline-ready progressive application designed for 
 
 ---
 
-## 🛠️ How to Use & Install
+## 🛠️ How to Install & Use
 
-### Option 1: Run the Live App
-Simply tap the link below in your device browser to launch your personal application dashboard immediately:
-👉 **[Launch AutoGrow Live](https://137-labs.github.io/Autogrow/)**
+### ⚡ One-Click Automatic Installation
+Simply tap the link below to launch the application. The system is designed to automatically trigger your device's native installation prompt immediately upon opening:
 
-### Option 2: Run Locally
-1. Download the application package from this repository.
-2. Open the application directly on your device.
+👉 **[Launch & Install AutoGrow](https://137-labs.github.io/Autogrow/)**
 
-### Option 3: Immersive Fullscreen Mode (Recommended)
-To run the application cleanly without any browser address bars or outlines, save it directly to your device home screen:
-- **Android / Samsung:** Open the live link, tap the browser menu (three vertical dots), and select **"Add to Home screen"** or **"Install app"**.
-- **iOS:** Open the live link in Safari, tap the **Share** icon at the bottom center, scroll down, and select **"Add to Home Screen"**.
+*(If your browser bypasses the automatic prompt, you can manually add it to your screen at any time by opening the browser menu and selecting **"Add to Home screen"** or **"Install app"**).*
