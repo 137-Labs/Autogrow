@@ -10,9 +10,10 @@ A minimalist, privacy-first, offline-ready progressive application designed for 
 Launch your personal dashboard instantly inside your device browser to see the startup welcome screen:
 👉 **[Launch AutoGrow Live](https://137-labs.github.io/Autogrow/)**
 
-### Option 2: Download Straight to Your Phone (Bypass Browser Layout)
-If you want to save the application directly to your storage as a permanent local asset without dealing with web links, click below to trigger an immediate package transfer:
-👉 **[Direct Download Now](https://raw.githubusercontent.com/137-labs/Autogrow/main/index.html)**
+### Option 2: Download Straight to Your Phone
+If you want to save the application directly to your storage as a permanent local asset, click below to trigger an immediate download:
+👉 **[Direct Download Now](https://github.com/137-labs/Autogrow/raw/main/index.html?download=)**
+
 
 ---
 
