@@ -2,36 +2,28 @@
 
 A minimalist, privacy-first, offline-ready progressive application designed for home horticultural tracking and grow room metrics management.
 
----
-
-## 🚀 Get the App
-
-### Option 1: Run the Live App Online
-Launch your personal dashboard instantly inside your device browser to see the startup welcome screen:
 👉 **[Launch AutoGrow Live](https://137-labs.github.io/Autogrow/)**
 
-### Option 2: Download Straight to Your Phone
-If you want to save the application directly to your storage as a permanent local asset, click below to trigger an immediate download:
-👉 **[Direct Download Now](https://github.com/137-labs/Autogrow/raw/main/index.html?download=)**
+---
 
+## 🚀 Features
+
+- **📱 Architecture:** Completely self-contained system. No databases or backend modules required.
+- **🔐 Total Data Sovereignty:** 100% client-side data storage. Your seed bank inventory, logs, and feeding schedules remain completely inside your device memory—never uploaded to a third-party server.
+- **🌱 Integrated Utilities:** Built-in modular panels optimized for tracking grow cycles, atmospheric logs, and seed vault catalogs.
+- **🔋 Offline-First Engine:** Access your data and update metrics deep in indoor grow tents or offline locations without losing application capability.
+- **🕶️ Minimalist UI:** High-contrast, all-black dark mode interface designed for quick navigation and optimal nighttime viewing.
 
 ---
 
-## 📱 Features
+## 🛠️ How to Use & Install
 
-- **Architecture:** Completely self-contained system requiring no databases or backend modules.
-- **Total Data Sovereignty:** 100% client-side storage. Your seed bank inventory, logs, and feeding schedules remain completely inside your device memory—never uploaded to a third-party server.
-- **Integrated Utilities:** Built-in modular panels optimized for tracking grow cycles, atmospheric logs, and seed vault catalogs.
-- **Offline-First Engine:** Access your data and update metrics deep in indoor grow tents or offline locations without losing application capability.
-- **Minimalist UI:** High-contrast, all-black dark mode interface designed for quick navigation and optimal nighttime viewing.
+### Option 1: Run the Live App
+Simply tap the link below in your device browser to launch your personal application dashboard immediately:
 
----
+👉 **[Launch AutoGrow Live](https://137-labs.github.io/Autogrow/)**
 
-## 🛠️ How to Launch & Install Your Downloaded File
-
-If you chose **Option 2 (Direct Download Now)** to save the package straight to your phone, use these quick steps to launch it like a real app:
-
-1. Open your device’s default file manager (such as **My Files** on Samsung devices).
-2. Go to your **Downloads** folder and tap directly on the downloaded asset. 
-3. It will instantly boot open in full screen natively through your default browser container, entirely offline.
-4. To run it without any browser URL bars in the future, tap your browser's menu option (three vertical dots) and select **"Add to Home Screen"** or **"Install app"**.
+### Option 2: Immersive Fullscreen Mode (Recommended)
+To run the application cleanly without any browser address bars or outlines, save it directly to your device home screen:
+- **Android / Samsung:** Open the live link, tap the browser menu (three vertical dots), and select **"Add to Home screen"** or **"Install app"**.
+- **iOS:** Open the live link in Safari, tap the **Share** icon at the bottom center, scroll down, and select **"Add to Home Screen"**.
