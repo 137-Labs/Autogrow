@@ -1,5 +1,7 @@
 # AutoGrow
 
+**[🌿 Open AutoGrow](https://137-labs.github.io/autogrow/)**
+
 A single-file, offline-first grow tracker for home cultivators — cannabis, tomatoes, and basil. Plant it, log it, feed it, harvest it, cure it. No account, no server, no subscription. Everything runs from one HTML file in your browser, and your data never leaves your device.
 
 ## Why this exists
